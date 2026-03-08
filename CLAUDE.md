@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Running the Application
 
 ```bash
