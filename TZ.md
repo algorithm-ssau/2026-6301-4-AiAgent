@@ -43,12 +43,12 @@
 
 | Участник | Файлы |
 |----------|-------|
-| 1 | `Core/capture.py`, `Core/backends/mss_backend.py` |
-| 2 | `Core/detector.py`, `Tests/test_detector.py` |
-| 3 | `Core/tracker.py`, `Tests/test_tracker.py` |
-| 4 | `train.py`, `Overlay/base.py`, `Core/backends/wayland_backend.py`, `Overlay/linux/overlay_lin.py`, `Models/best.onnx` |
-| 5 | `Core/utils.py`, `Overlay/windows/overlay_win.py` |
-| 6 | `gui.py`, `main.py`, `requirements.txt` |
+| 1 — Артем Виряскин | `Core/capture.py`, `Core/backends/mss_backend.py` |
+| 2 — Игорь | `Core/detector.py`, `Tests/test_detector.py` |
+| 3 — Миша | `Core/tracker.py`, `Tests/test_tracker.py` |
+| 4 — Саша | `train.py`, `Overlay/base.py`, `Core/backends/wayland_backend.py`, `Overlay/linux/overlay_lin.py`, `Models/best.onnx` |
+| 5 — Артем Сурков | `Core/utils.py`, `Overlay/windows/overlay_win.py` |
+| 6 — Макс | `gui.py`, `main.py`, `requirements.txt` |
 
 ---
 
@@ -79,7 +79,7 @@
 
 ---
 
-## Участник 1 — Захват экрана (Windows/X11)
+## Участник 1 (Артем Виряскин) — Захват экрана (Windows/X11)
 
 **Система:** Windows
 **Файлы:** `Core/capture.py`, `Core/backends/mss_backend.py`
@@ -129,7 +129,7 @@
 
 ---
 
-## Участник 2 — Детекция объектов
+## Участник 2 (Игорь) — Детекция объектов
 
 **Система:** Windows
 **Файлы:** `Core/detector.py`, `Tests/test_detector.py`
@@ -220,7 +220,7 @@ def test_reset_tracker_does_not_raise():
 
 ---
 
-## Участник 3 — Сглаживание треков
+## Участник 3 (Миша) — Сглаживание треков
 
 **Система:** Windows
 **Файлы:** `Core/tracker.py`, `Tests/test_tracker.py`
@@ -326,7 +326,7 @@ def test_reset_clears_tracks():
 
 ---
 
-## Участник 4 — Обучение модели + Оверлей Linux + Захват Wayland
+## Участник 4 (Саша) — Обучение модели + Оверлей Linux + Захват Wayland
 
 **Система:** Linux (Hyprland)
 **Файлы:** `train.py`, `Overlay/base.py`, `Core/backends/wayland_backend.py`, `Overlay/linux/overlay_lin.py`
@@ -343,49 +343,14 @@ def test_reset_clears_tracks():
 
 #### Часть 1 — Датасет и обучение модели (Фаза 0)
 
-#### Шаг 1 — Найти датасет на Roboflow Universe
+#### Шаг 1 — Датасет
 
-Зайти на [roboflow.com/universe](https://universe.roboflow.com), найти датасет
-с алкогольными бутылками. Подходящие запросы: `alcohol detection`, `beer bottle`,
-`wine bottle`, `liquor bottle`.
-
-Критерии выбора:
-- Не меньше 500 изображений
-- Есть разделение на train/val
-- Формат экспорта — **YOLOv8**
-
-Скачать через Roboflow Python API (установить `requirements-train.txt`):
-```python
-from roboflow import Roboflow
-
-rf = Roboflow(api_key="ВАШ_КЛЮЧ")  # бесплатный аккаунт на roboflow.com
-project = rf.workspace("...").project("...")
-dataset = project.version(1).download("yolov8", location="dataset/")
-```
+Используется датасет **Alcohol Computer Vision Model** (adonantonin/alcohol-iaeeq, версия 4):
+- 7332 изображения, split: 81% train / 10% val / 9% test
+- 5 классов: `alcohol-bottle`, `beer-bottle`, `beer-glass`, `shot`, `wine-glass`
+- Формат: **YOLO26**
 
 #### Шаг 2 — `train.py`
-
-```python
-import shutil
-from ultralytics import YOLO
-
-model = YOLO("yolo26n.pt")
-
-model.train(
-    data="dataset/data.yaml",
-    epochs=50,
-    imgsz=640,
-    batch=16,      # можно больше если хватает памяти GPU/CPU
-    project="runs",
-    name="alcohol",
-)
-
-# Экспортировать в ONNX и положить в Models/
-model_path = "runs/alcohol/weights/best.pt"
-exported = YOLO(model_path).export(format="onnx", opset=12)
-shutil.copy(str(exported), "Models/best.onnx")
-print("Модель сохранена в Models/best.onnx")
-```
 
 Запустить:
 ```bash
@@ -393,10 +358,26 @@ pip install -r requirements-train.txt
 python train.py
 ```
 
+После обучения скрипт спросит:
+```
+Сохранить как основную модель (best.onnx)? [y/N]:
+```
+- `y` — старая `best.onnx` уходит в `Models/archive/best_YYYYMMDD.onnx`, новая становится `Models/best.onnx`
+- `n` / Enter — новая сохраняется в `Models/archive/model_YYYYMMDD.onnx`, `best.onnx` не трогается
+
 Содержимое `requirements-train.txt`:
 ```
--r requirements.txt
+ultralytics>=8.3.0
 roboflow>=1.1.0
+```
+
+Структура `Models/`:
+```
+Models/
+├── best.onnx             ← в git (актуальная модель)
+└── archive/              ← в .gitignore (локальные архивы)
+    ├── best_20260321.onnx
+    └── model_20260321.onnx
 ```
 
 Закоммитить и сообщить команде:
@@ -525,7 +506,7 @@ def update_boxes(self, boxes):
 
 ---
 
-## Участник 5 — Оверлей Windows + FpsCounter
+## Участник 5 (Артем Сурков) — Оверлей Windows + FpsCounter
 
 **Система:** Windows
 **Файлы:** `Overlay/windows/overlay_win.py`, `Core/utils.py`
@@ -629,7 +610,7 @@ win32gui.PostMessage(self._hwnd, WM_APP_UPDATE, 0, 0)
 
 ---
 
-## Участник 6 — GUI + Сборка
+## Участник 6 (Макс) — GUI + Сборка
 
 **Система:** Windows
 **Файлы:** `gui.py`, `main.py`, `requirements.txt`
