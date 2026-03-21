@@ -10,8 +10,8 @@ venv/
 runs/
 dataset/
 
-# ONNX лежит в репо (Models/best.onnx), но промежуточные — нет
-runs/
+# ONNX лежит в репо (Models/best.onnx), архивные копии — нет
+Models/archive/
 
 # Зависимости для обучения — создаются локально, не коммитятся
 requirements-train.txt
