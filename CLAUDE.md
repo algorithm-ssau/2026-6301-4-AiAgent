@@ -29,9 +29,15 @@ python -m pytest Tests/test_detector.py::test_function_name
 ## Model Training
 
 ```bash
-# 1. Download dataset from Roboflow (see TZ.md — Участник 4)
-# 2. Train, export to ONNX and copy to Models/ — all in one step
+pip install -r requirements-train.txt
 python train.py
+```
+
+Dataset and Roboflow credentials are hardcoded in `train.py` (adonantonin/alcohol-iaeeq, v4, YOLO26 format). After training, the script prompts whether to save as `Models/best.onnx` (main) or `Models/archive/model_YYYYMMDD.onnx`. Only `Models/best.onnx` is committed to git; `Models/archive/` is gitignored.
+
+AMD GPU requires PyTorch with ROCm instead of the default CUDA build:
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.1
 ```
 
 ## Architecture
