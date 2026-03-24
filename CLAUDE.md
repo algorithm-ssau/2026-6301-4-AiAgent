@@ -50,6 +50,9 @@ Real-time screen capture → YOLO26 detection → ByteTrack tracking → transpa
 - `backends/wayland_backend.py` — Hyprland capture via PipeWire + xdg-desktop-portal
 - `detector.py` — `BottleDetector` runs YOLO26 + ByteTrack; returns `Detection` dataclasses in 640×640 space
 - `tracker.py` — `TrackSmoother` projects detections to screen coords, applies EMA smoothing and decay
+- `utils.py` — `FpsCounter`: thread-safe sliding-window FPS counter; call `.tick()` per frame, `.get()` for current FPS
+
+> **Implementation status**: most `Core/` and `Overlay/` files are currently empty stubs. `Core/utils.py` and `train.py` are fully implemented; `Tests/test_tracker.py` is complete and uses `DummyTrackSmoother`/`DummyDetection` fallbacks so tests pass even before real implementations exist.
 
 **Overlay** (`Overlay/`): `base.py` defines `OverlayBase` ABC; platform implementations run their render loop in a background thread. `update_boxes()` is always thread-safe.
 - Linux: GTK3 + gtk-layer-shell (wlr-layer-shell protocol), Cairo rendering
