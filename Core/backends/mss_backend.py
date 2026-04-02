@@ -40,6 +40,12 @@ class MssBackend:
         if self._sct is None:
             raise RuntimeError("Backend not started. Call start() first.")
         
+        # FPS limiting
+        if self._frame_interval > 0:
+            elapsed = time.perf_counter() - self._last_capture_time
+            if elapsed < self._frame_interval:
+                time.sleep(self._frame_interval - elapsed)
+        
         # Capture frame (returns BGRA)
         frame = np.array(self._sct.grab(self._sct.monitors[self.monitor_index]))
         
