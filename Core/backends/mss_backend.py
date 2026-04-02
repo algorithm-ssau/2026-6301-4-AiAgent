@@ -65,4 +65,8 @@ class MssBackend:
         if self._monitor_rect is None:
             raise RuntimeError("Backend not started. Call start() first.")
         return self._monitor_rect.copy()
-    
+        
+    @staticmethod
+    def list_monitors() -> list:
+        from Core.backends.mss_backend import MssBackend
+        return MssBackend.list_monitors()
