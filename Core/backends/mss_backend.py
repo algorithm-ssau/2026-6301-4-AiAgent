@@ -20,7 +20,7 @@ class MssBackend:
         self._sct = mss.mss()
         
         # Validate monitor index
-        monitors = self.list_monitors()
+        monitors = self._list_monitors_static()  # Changed to static method call
         if self.monitor_index < 1 or self.monitor_index > len(monitors):
             raise ValueError(
                 f"Monitor index {self.monitor_index} is invalid. "
@@ -37,6 +37,7 @@ class MssBackend:
         }
         
     def grab(self) -> np.ndarray:
+
         if self._sct is None:
             raise RuntimeError("Backend not started. Call start() first.")
         
@@ -62,11 +63,17 @@ class MssBackend:
         self._last_capture_time = 0
         
     def get_monitor_rect(self) -> Dict:
+
         if self._monitor_rect is None:
             raise RuntimeError("Backend not started. Call start() first.")
         return self._monitor_rect.copy()
-        
+    
     @staticmethod
-    def list_monitors() -> list:
-        from Core.backends.mss_backend import MssBackend
-        return MssBackend.list_monitors()
+    def list_monitors() -> List[Dict]:
+        return MssBackend._list_monitors_static()
+    
+    @staticmethod
+    def _list_monitors_static() -> List[Dict]:
+        with mss.mss() as sct:
+            # Skip monitor[0] which is the combined virtual screen
+            return [dict(monitor) for monitor in sct.monitors[1:]]
