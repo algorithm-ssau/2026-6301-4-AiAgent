@@ -79,7 +79,7 @@
 
 ---
 
-## Участник 1 (Артем Виряскин) — Захват экрана (Windows/X11)
+## Участник 1 (Артем Виряскин) — Захват экрана (Windows/X11) ✅ ГОТОВО
 
 **Система:** Windows
 **Файлы:** `Core/capture.py`, `Core/backends/mss_backend.py`
@@ -201,7 +201,7 @@ finally:
 
 ---
 
-## Участник 2 (Игорь) — Детекция объектов
+## Участник 2 (Игорь) — Детекция объектов ✅ ГОТОВО
 
 **Система:** Windows
 **Файлы:** `Core/detector.py`, `Tests/test_detector.py`
@@ -292,7 +292,7 @@ def test_reset_tracker_does_not_raise():
 
 ---
 
-## Участник 3 (Миша) — Сглаживание треков
+## Участник 3 (Миша) — Сглаживание треков ✅ ГОТОВО
 
 **Система:** Windows
 **Файлы:** `Core/tracker.py`, `Tests/test_tracker.py`
@@ -406,108 +406,84 @@ def test_reset_clears_tracks():
 ### Что нужно сделать
 
 Четыре задачи в таком порядке:
-1. **Фаза 0** — найти датасет, написать `train.py`, запустить обучение на своём железе
-2. **Фаза 1, пока идёт обучение** — написать `Overlay/base.py` (нужен Участнику 5)
-3. **Фаза 1** — написать `WaylandBackend` для захвата экрана
+1. ✅ **Фаза 0** — найти датасет, написать `train.py`, запустить обучение на своём железе
+2. ✅ **Фаза 1, пока идёт обучение** — написать `Overlay/base.py` (нужен Участнику 5)
+3. ✅ **Фаза 1** — написать `WaylandBackend` для захвата экрана
 4. **Фаза 1** — написать `LinuxOverlay`
 
 ### Подробно
 
-#### Часть 1 — Датасет и обучение модели (Фаза 0)
+#### Часть 1 — `train.py` ✅ ГОТОВО
 
-#### Шаг 1 — Датасет
+Скачивает датасет **Alcohol Computer Vision Model** (adonantonin/alcohol-iaeeq, версия 4,
+7332 изображений, 5 классов алкоголя) с Roboflow в папку `dataset/`.
+Затем обучает `yolo26n.pt` на 50 эпох с размером изображения 640 и batch 16.
+Результаты сохраняются в `runs/alcohol/`.
 
-Используется датасет **Alcohol Computer Vision Model** (adonantonin/alcohol-iaeeq, версия 4):
-- 7332 изображения, split: 81% train / 10% val / 9% test
-- 5 классов: `alcohol-bottle`, `beer-bottle`, `beer-glass`, `shot`, `wine-glass`
-- Формат: **YOLO26**
+После обучения экспортирует лучшие веса в ONNX (opset 12) и спрашивает:
+```
+Сохранить как основную модель (best.onnx)? [y/N]:
+```
+- `y` — старая `Models/best.onnx` уходит в `Models/archive/best_YYYYMMDD.onnx`, новая занимает её место
+- `n` / Enter — новая сохраняется в `Models/archive/model_YYYYMMDD.onnx`, `best.onnx` не трогается
 
-#### Шаг 2 — `train.py`
-
-Запустить:
+Запуск:
 ```bash
 pip install -r requirements-train.txt
 python train.py
 ```
 
-После обучения скрипт спросит:
-```
-Сохранить как основную модель (best.onnx)? [y/N]:
-```
-- `y` — старая `best.onnx` уходит в `Models/archive/best_YYYYMMDD.onnx`, новая становится `Models/best.onnx`
-- `n` / Enter — новая сохраняется в `Models/archive/model_YYYYMMDD.onnx`, `best.onnx` не трогается
-
-Содержимое `requirements-train.txt`:
-```
-ultralytics>=8.3.0
-roboflow>=1.1.0
-```
-
-Структура `Models/`:
-```
-Models/
-├── best.onnx             ← в git (актуальная модель)
-└── archive/              ← в .gitignore (локальные архивы)
-    ├── best_20260321.onnx
-    └── model_20260321.onnx
-```
-
-Закоммитить и сообщить команде:
-```bash
-git add Models/best.onnx train.py
-git commit -m "feat: добавлена обученная модель детекции алкоголя"
-git push
-# Написать команде — пусть делают git pull
-```
-
 #### Часть 2 — `Overlay/base.py` ✅ ГОТОВО
 
-Абстрактный класс `OverlayBase` с методами:
-- `start()` — создать окно и запустить в отдельном потоке
-- `stop()` — завершить поток
-- `update_boxes(boxes)` — обновить список прямоугольников (thread-safe)
-- `is_running() -> bool` — жив ли поток
+Абстрактный класс `OverlayBase` — общий интерфейс для оверлеев на всех платформах.
+Определяет четыре метода, которые должна реализовать каждая платформа:
+- `start()` — создать окно и запустить рендер-цикл в отдельном потоке
+- `stop()` — завершить поток и закрыть окно
+- `update_boxes(boxes)` — обновить список прямоугольников (вызывается из любого потока)
+- `is_running() -> bool` — жив ли рендер-поток
 
-Тип `Box = Tuple[int, int, int, int]` — координаты `(x1, y1, x2, y2)`.
+Также определяет тип `Box = Tuple[int, int, int, int]` — координаты `(x1, y1, x2, y2)`.
 
-Отправить Участнику 5 (нужен для `overlay_win.py`).
+#### Часть 3 — `Core/backends/wayland_backend.py` ✅ ГОТОВО
 
-#### Часть 3 — `Core/backends/wayland_backend.py`
+Класс `WaylandBackend` — захват экрана на Hyprland через xdg-desktop-portal и GStreamer.
 
-Класс `WaylandBackend` для захвата экрана на Hyprland.
+**Как работает:**
+1. При вызове `start()` открывается D-Bus сессия с `org.freedesktop.portal.Desktop`
+2. Через портал создаётся ScreenCast-сессия: `CreateSession` → `SelectSources` → `Start`
+3. Hyprland показывает системный диалог со списком мониторов — пользователь выбирает один
+4. Портал возвращает PipeWire `node_id` и файловый дескриптор (`fd`)
+5. Открывается GStreamer-пайплайн, который читает кадры из PipeWire и конвертирует в BGR:
+   ```
+   pipewiresrc fd={fd} path={node_id} ! videoconvert ! video/x-raw,format=BGR ! appsink
+   ```
+6. `videoconvert` Разрешение монитора определяется из первого кадра.
 
-Как это работает:
-1. Python обращается к `xdg-desktop-portal-hyprland` через D-Bus
-2. Hyprland показывает диалог "разрешить захват экрана?" — пользователь выбирает монитор
-3. Portal возвращает PipeWire stream (node_id + file descriptor)
-4. GStreamer читает кадры из этого потока через `pipewiresrc`
-5. `appsink` отдаёт кадры в Python как numpy array
+D-Bus переговоры асинхронные (внутри GLib mainloop в отдельном потоке).
+`start()` блокируется до готовности пайплайна через `threading.Event`.
 
-Методы те же, что у `MssBackend`: `start()`, `grab()`, `stop()`, `get_monitor_rect()`.
+**Публичные методы** (те же, что у `MssBackend`):
+- `start()` — запускает всё вышеперечисленное, ждёт готовности (таймаут 30 сек)
+- `grab() -> np.ndarray` — забирает следующий кадр как BGR numpy array; соблюдает `fps_limit`
+- `stop()` — останавливает GStreamer пайплайн и GLib mainloop
+- `get_monitor_rect() -> dict` — возвращает `{"top", "left", "width", "height"}` захваченного монитора
 
-Внутри `start()`:
-- Открыть D-Bus сессию с `org.freedesktop.portal.Desktop`
-- Создать ScreenCast сессию, выбрать источник (монитор), запустить
-- Получить `node_id` и `pipewire_fd`
-- Запустить GStreamer pipeline:
-  ```
-  pipewiresrc fd={fd} path={node_id} ! videoconvert ! video/x-raw,format=BGR ! appsink
-  ```
-- Из первого кадра узнать разрешение экрана и сохранить в `_monitor_rect`
-
-Внутри `grab()`:
-- `appsink.emit("pull-sample")` → достать буфер → numpy array BGR
-- Если сэмпл None — вернуть пустой кадр того же размера
-
-Установка зависимостей:
+Зависимости:
 ```bash
 sudo pacman -S xdg-desktop-portal-hyprland pipewire gstreamer \
                gst-plugin-pipewire gst-plugins-base python-dbus python-gobject
 ```
 
+Быстрая проверка без основного приложения:
+```bash
+python Core/backends/wayland_backend.py
+```
+Покажет диалог выбора монитора, захватит 30 кадров и выведет средний FPS.
+
 #### Часть 4 — `Overlay/linux/overlay_lin.py`
 
-Класс `LinuxOverlay(OverlayBase)` — прозрачное окно поверх всего экрана.
+Нужно написать класс `LinuxOverlay(OverlayBase)` — прозрачное окно поверх всего экрана,
+в котором рисуются чёрные прямоугольники поверх бутылок.
 
 Используется `gtk-layer-shell` (протокол wlr-layer-shell, Hyprland поддерживает).
 
@@ -515,66 +491,22 @@ sudo pacman -S xdg-desktop-portal-hyprland pipewire gstreamer \
 sudo pacman -S gtk-layer-shell python-gobject
 ```
 
-Создание окна:
-```python
-import gi
-gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, GtkLayerShell, Gdk, GLib
-import cairo
+**Что должно делать окно:**
+- Растягиваться на весь экран, быть полностью прозрачным
+- Находиться поверх всех остальных окон (layer OVERLAY)
+- Быть click-through — мышь и клавиатура работают в обычных окнах под ним
+- Рисовать чёрные непрозрачные прямоугольники через Cairo по координатам из `_boxes`
 
-window = Gtk.Window()
-GtkLayerShell.init_for_window(window)
-GtkLayerShell.set_layer(window, GtkLayerShell.Layer.OVERLAY)
-GtkLayerShell.set_anchor(window, GtkLayerShell.Edge.TOP, True)
-GtkLayerShell.set_anchor(window, GtkLayerShell.Edge.LEFT, True)
-GtkLayerShell.set_exclusive_zone(-1)
-```
-
-RGBA прозрачность:
-```python
-screen = window.get_screen()
-visual = screen.get_rgba_visual()
-if visual:
-    window.set_visual(visual)
-window.set_app_paintable(True)
-```
-
-Click-through (мышь проходит сквозь окно):
-```python
-region = cairo.Region()
-window.input_shape_combine_region(region)
-```
-
-Draw-обработчик (рисует чёрные прямоугольники):
-```python
-def _on_draw(self, widget, cr):
-    cr.set_operator(cairo.OPERATOR_CLEAR)
-    cr.paint()                    # прозрачный фон
-    cr.set_operator(cairo.OPERATOR_OVER)
-    cr.set_source_rgba(0, 0, 0, 1)
-    for x1, y1, x2, y2 in self._boxes:
-        cr.rectangle(x1, y1, x2 - x1, y2 - y1)
-        cr.fill()
-```
-
-GTK работает в отдельном потоке. Из pipeline-потока **нельзя** вызывать GTK напрямую.
-Обновление прямоугольников только через:
-```python
-def update_boxes(self, boxes):
-    with self._lock:
-        self._boxes = list(boxes)
-    GLib.idle_add(self._window.queue_draw)
-```
+**GTK работает в отдельном потоке.** Из pipeline-потока нельзя вызывать GTK напрямую.
+Обновление прямоугольников — только через `GLib.idle_add(self._window.queue_draw)`.
 
 ### Коммиты
 1. `feat: добавлен train.py со скачиванием датасета и обучением модели`
 2. `feat: добавлена обученная модель детекции алкоголя (best.onnx)`
 3. `feat: добавлен абстрактный OverlayBase и тип Box`
 4. `feat: добавлен WaylandBackend с захватом экрана через xdg-portal`
-5. `feat: добавлен GStreamer PipeWire пайплайн для захвата кадров`
-6. `feat: добавлено окно LinuxOverlay на gtk-layer-shell`
-7. `feat: добавлена Cairo-отрисовка и click-through`
+5. `feat: добавлено окно LinuxOverlay на gtk-layer-shell`
+6. `feat: добавлена Cairo-отрисовка и click-through`
 
 ---
 
@@ -587,12 +519,12 @@ def update_boxes(self, boxes):
 ### Что нужно сделать
 
 Две задачи, первую можно делать сразу в Фазе 1 не дожидаясь никого:
-1. Написать `Core/utils.py` с `FpsCounter`
+1. ✅ Написать `Core/utils.py` с `FpsCounter`
 2. Написать оверлей для Windows (после получения `base.py` от Участника 4)
 
 ### Подробно
 
-#### Часть 1 — `Core/utils.py` с `FpsCounter` (делать первым, в Фазе 1)
+#### Часть 1 — `Core/utils.py` с `FpsCounter` (делать первым, в Фазе 1) ✅ ГОТОВО
 
 `FpsCounter` — простой потокобезопасный счётчик FPS. Используется в `pipeline_loop`,
 читается GUI для отображения текущей скорости.
