@@ -57,6 +57,14 @@ class WindowsOverlay(OverlayBase):
             if not self._hwnd:
                 raise RuntimeError("Не удалось создать окно")
 
+            # Делаем окно полностью прозрачным (пока без содержимого)
+            # Устанавливаем прозрачный цветовой ключ (маджента)
+            win32gui.SetLayeredWindowAttributes(
+                self._hwnd,
+                0xFF00FF,  # Маджента как прозрачный цвет
+                0,
+                win32con.LWA_COLORKEY
+            )
             # Показываем окно
             win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
 
@@ -65,7 +73,7 @@ class WindowsOverlay(OverlayBase):
             self._thread = threading.Thread(target=self._message_loop, daemon=True)
             self._thread.start()
 
-            print(f"Оверлей запущен: {self.width}x{self.height}")
+            print(f"Прозрачный оверлей запущен: {self.width}x{self.height}")
 
         except Exception as e:
             print(f"Ошибка запуска оверлея: {e}")
@@ -90,7 +98,6 @@ class WindowsOverlay(OverlayBase):
         """Обновить список прямоугольников. Вызывается из любого потока."""
         with self._lock:
             self._boxes = list(boxes)
-        # Пока просто печатаем для отладки
         print(f"Получено рамок: {len(boxes)}")
 
     def is_running(self) -> bool:
@@ -102,12 +109,8 @@ class WindowsOverlay(OverlayBase):
         if msg == win32con.WM_DESTROY:
             self._running = False
             return 0
-        elif msg == win32con.WM_PAINT:
-            # Пока просто белый фон для видимости окна
-            hdc, paint_struct = win32gui.BeginPaint(hwnd)
-            win32gui.FillRect(hdc, (0, 0, self.width, self.height), win32gui.GetStockObject(win32con.WHITE_BRUSH))
-            win32gui.EndPaint(hwnd, paint_struct)
-            return 0
+        elif msg == win32con.WM_ERASEBKGND:
+            return 1
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     def _message_loop(self):
