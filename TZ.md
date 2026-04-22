@@ -227,11 +227,18 @@ class Detection:
     track_id: int | None  # ID трека (None если трекинг не использовался)
 ```
 
+**Вспомогательная функция `_select_device() -> str`**:
+- Проверяет `torch.cuda.is_available()` — возвращает `"cuda"` если GPU доступен
+- ROCm-сборка PyTorch для AMD также возвращает `True` через тот же интерфейс
+- Если torch не установлен или GPU нет — возвращает `"cpu"`
+
 **Класс `BottleDetector`**:
-- `__init__(model_path, conf=0.35)`
+- `__init__(model_path, conf=0.35, device="auto")`
   - `model_path` — путь к файлу модели (.pt или .onnx)
   - `conf` — минимальная уверенность для детекции
-  - Загрузить модель: `self._model = YOLO(model_path)`
+  - `device` — устройство для инференса: `"auto"` (автовыбор), `"cuda"` (NVIDIA/AMD ROCm), `"cpu"`
+  - При `device="auto"` вызывает `_select_device()` для определения GPU
+  - Загрузить модель: `self._model = YOLO(model_path, task="detect")`
   - Определить классы автоматически:
     - Если файл `.pt` (COCO) → `self._classes = [39]` (bottle)
     - Если файл `.onnx` (кастомная модель) → `self._classes = None` (все классы)
@@ -240,7 +247,7 @@ class Detection:
 
 - `track(frame_bgr) -> List[Detection]`
   - Запустить детекцию + трекинг ByteTrack
-  - Вызов: `self._model.track(frame_bgr, persist=True, conf=..., classes=..., tracker="bytetrack.yaml", verbose=False)`
+  - Вызов: `self._model.track(frame_bgr, persist=True, conf=..., classes=..., tracker="bytetrack.yaml", verbose=False, device=self._device)`
   - Из результата взять `boxes.xyxy` (координаты), `boxes.conf`, `boxes.id`
   - Если `boxes.id` равен None (треков нет) — вернуть пустой список
   - Координаты привести к `int`
@@ -256,31 +263,46 @@ class Detection:
 > Важно: координаты в `Detection` — в пространстве входного кадра (640×640),
 > не в экранных координатах. Обратная проекция — задача Участника 3.
 
+> Поддержка AMD GPU: установить PyTorch с ROCm вместо стандартного CUDA:
+> `pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.1`
+> После этого `_select_device()` автоматически определит видеокарту AMD.
+
 ### Проверка работы
 
 Написать `Tests/test_detector.py` и запустить `pytest Tests/test_detector.py`:
 
 ```python
-from Core.detector import BottleDetector, Detection
+from Core.detector import BottleDetector, Detection, _select_device
 import numpy as np
 
 def test_detect_returns_list():
-    # детектор не падает и возвращает список
-    detector = BottleDetector("yolo26n.pt")
+    detector = BottleDetector("Models/best.onnx", device="cpu")
     frame = np.zeros((640, 640, 3), dtype=np.uint8)
     result = detector.detect(frame)
     assert isinstance(result, list)
 
 def test_detect_track_id_is_none():
-    # detect() не запускает трекинг — track_id всегда None
-    detector = BottleDetector("yolo26n.pt")
+    detector = BottleDetector("Models/best.onnx", device="cpu")
     frame = np.zeros((640, 640, 3), dtype=np.uint8)
     for det in detector.detect(frame):
         assert det.track_id is None
 
 def test_reset_tracker_does_not_raise():
-    detector = BottleDetector("yolo26n.pt")
-    detector.reset_tracker()  # не должен падать
+    detector = BottleDetector("Models/best.onnx", device="cpu")
+    detector.reset_tracker()
+
+def test_select_device_returns_string():
+    device = _select_device()
+    assert device in ("cuda", "cpu")
+
+def test_detector_device_auto():
+    # автовыбор работает на NVIDIA, AMD ROCm и CPU
+    detector = BottleDetector("Models/best.onnx", device="auto")
+    assert detector._device in ("cuda", "cpu")
+
+def test_detector_device_cpu_explicit():
+    detector = BottleDetector("Models/best.onnx", device="cpu")
+    assert detector._device == "cpu"
 ```
 
 ### Коммиты
@@ -289,6 +311,7 @@ def test_reset_tracker_does_not_raise():
 3. `feat: добавлены методы track() и detect()`
 4. `feat: добавлен метод reset_tracker()`
 5. `test: добавлены тесты детектора`
+6. `feat: добавлена поддержка AMD GPU через автоопределение устройства`
 
 ---
 
