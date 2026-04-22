@@ -12,6 +12,8 @@ from typing import List, Tuple
 
 from Overlay.base import OverlayBase, Box
 
+# Пользовательское сообщение для обновления оверлея из другого потока
+WM_APP_UPDATE = win32con.WM_APP + 1
 
 class WindowsOverlay(OverlayBase):
     """Windows оверлей с прозрачным окном поверх всех приложений"""
@@ -31,6 +33,7 @@ class WindowsOverlay(OverlayBase):
         # Потокобезопасные данные
         self._lock = threading.Lock()
         self._boxes: List[Box] = []
+        self._update_pending = False  # Флаг для предотвращения множественных обновлений
 
     def start(self) -> None:
         """Создать окно и запустить рендер-цикл в отдельном потоке."""
@@ -106,6 +109,9 @@ class WindowsOverlay(OverlayBase):
         with self._lock:
             self._boxes = list(boxes)
 
+        # Отправляем сообщение в поток окна для перерисовки
+        if self._hwnd:
+            win32gui.PostMessage(self._hwnd, WM_APP_UPDATE, 0, 0)
 
     def is_running(self) -> bool:
         """Возвращает True, если рендер-поток жив."""
@@ -232,11 +238,18 @@ class WindowsOverlay(OverlayBase):
 
     def _window_procedure(self, hwnd, msg, wparam, lparam):
         """Обработчик сообщений Win32 окна."""
-        if msg == win32con.WM_DESTROY:
+        if msg == WM_APP_UPDATE:
+            # Пришло сообщение об обновлении из другого потока
+            self._render()
+            return 0
+
+        elif msg == win32con.WM_DESTROY:
             self._running = False
             return 0
+
         elif msg == win32con.WM_ERASEBKGND:
             return 1
+
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     def _message_loop(self):
@@ -248,7 +261,9 @@ class WindowsOverlay(OverlayBase):
                     win32gui.TranslateMessage(msg[1])
                     win32gui.DispatchMessage(msg[1])
                 else:
-                    time.sleep(0.001)
+                    # WM_QUIT получено
+                    break
             except Exception as e:
                 if self._running:
                     print(f"Ошибка в цикле сообщений: {e}")
+                    time.sleep(0.001)
