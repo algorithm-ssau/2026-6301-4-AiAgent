@@ -4,6 +4,18 @@ from typing import List
 from ultralytics import YOLO
 
 
+def _select_device() -> str:
+    """Автоопределение устройства: CUDA (NVIDIA) / ROCm (AMD) / CPU."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            # torch.cuda работает и с ROCm-сборкой PyTorch для AMD
+            return "cuda"
+    except ImportError:
+        pass
+    return "cpu"
+
+
 @dataclass
 class Detection:
     x1: int
@@ -15,9 +27,12 @@ class Detection:
 
 
 class BottleDetector:
-    def __init__(self, model_path: str, conf: float = 0.35):
+    def __init__(self, model_path: str, conf: float = 0.35, device: str = "auto"):
+        if device == "auto":
+            device = _select_device()
         self._model = YOLO(model_path, task="detect")
         self._conf = conf
+        self._device = device
         # .pt — COCO, бутылка = класс 39; .onnx — своя модель, бутылка = класс 0
         self._classes = [39] if str(model_path).endswith(".pt") else None
 
@@ -29,6 +44,7 @@ class BottleDetector:
             classes=self._classes,
             tracker="bytetrack.yaml",
             verbose=False,
+            device=self._device,
         )
         boxes = results[0].boxes
         if boxes.id is None:
@@ -49,6 +65,7 @@ class BottleDetector:
             conf=self._conf,
             classes=self._classes,
             verbose=False,
+            device=self._device,
         )
         boxes = results[0].boxes
         detections = []
