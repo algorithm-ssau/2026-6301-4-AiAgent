@@ -41,9 +41,9 @@ class TestTrackSmoother:
         """
         Тест сходимости EMA-фильтра.
 
-        При alpha=0.5 значение должно приближаться к 300, но не достигать его.
+        При alpha=0.6 значение должно быстро приближаться к 300.
         """
-        smoother = TrackSmoother(ema_alpha=0.5)
+        smoother = TrackSmoother(ema_alpha=0.6)
         det = Detection(
             x1=100, y1=100, x2=200, y2=200,
             conf=0.9, track_id=1
@@ -51,7 +51,7 @@ class TestTrackSmoother:
 
         # Сохраняем значения для анализа
         values = []
-        for i in range(30):
+        for i in range(20):
             boxes = smoother.update([det], screen_w=1920, screen_h=1080)
             values.append(boxes[0][0])
 
@@ -59,17 +59,14 @@ class TestTrackSmoother:
         for i in range(1, len(values)):
             assert values[i] >= values[i - 1], f"Значение уменьшилось на шаге {i}: {values[i - 1]} -> {values[i]}"
 
-        # Проверяем, что значение не превышает 300
-        assert values[-1] <= 300, f"Значение {values[-1]} превышает 300"
-
-        # Проверяем, что значение достаточно близко к 300 (в пределах 20%)
-        assert values[-1] > 240, f"Значение {values[-1]} слишком далеко от 300"
+        # Проверяем, что значение достаточно близко к 300 (в пределах 5 пикселей)
+        assert abs(values[-1] - 300) < 5, f"Значение {values[-1]} слишком далеко от 300"
 
         # Проверяем, что скорость изменения уменьшается (сходимость замедляется)
         diffs = [abs(values[i] - values[i - 1]) for i in range(1, len(values))]
         for i in range(2, len(diffs)):
-            # Не строгое условие, но хотя бы не увеличивается резко
-            assert diffs[i] <= diffs[i - 1] * 1.1, f"Скорость изменения выросла на шаге {i}"
+            # Разница должна уменьшаться
+            assert diffs[i] <= diffs[i - 1], f"Скорость изменения выросла на шаге {i}"
 
     def test_decay_removes_track(self):
         """Тест удаления трека после decay_frames кадров без обновления."""
@@ -184,6 +181,23 @@ class TestTrackSmoother:
         assert boxes[0][1] == 50
         assert boxes[0][2] == 2020  # 1920 + 100
         assert boxes[0][3] == 1130  # 1080 + 50
+
+    def test_validation(self):
+        """Тест валидации параметров."""
+        # Некорректные alpha
+        with pytest.raises(ValueError):
+            TrackSmoother(ema_alpha=-0.5)
+        with pytest.raises(ValueError):
+            TrackSmoother(ema_alpha=1.5)
+
+        # Некорректные decay_frames
+        with pytest.raises(ValueError):
+            TrackSmoother(decay_frames=-1)
+
+        # Корректные значения должны работать
+        smoother = TrackSmoother(ema_alpha=0.5, decay_frames=5)
+        assert smoother.ema_alpha == 0.5
+        assert smoother.decay_frames == 5
 
 
 if __name__ == "__main__":

@@ -139,7 +139,3 @@ class TrackSmoother:
     def get_track_ids(self) -> List[int]:
         """Вернуть список активных track_id (для отладки)."""
         return list(self._tracks.keys())
-
-
-# Для обратной совместимости и удобства импорта
-Box = Tuple[int, int, int, int]
