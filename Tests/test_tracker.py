@@ -6,12 +6,13 @@
 import pytest
 import sys
 import os
+import time
 
 # Добавляем путь к корню проекта
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from Core.detector import Detection
-from Core.tracker import TrackSmoother
+from Core.tracker import TrackSmoother, TrackStats
 
 
 class TestTrackSmoother:
@@ -194,10 +195,150 @@ class TestTrackSmoother:
         with pytest.raises(ValueError):
             TrackSmoother(decay_frames=-1)
 
+        # Некорректный min_confidence
+        with pytest.raises(ValueError):
+            TrackSmoother(min_confidence=-0.1)
+        with pytest.raises(ValueError):
+            TrackSmoother(min_confidence=1.5)
+
         # Корректные значения должны работать
         smoother = TrackSmoother(ema_alpha=0.5, decay_frames=5)
         assert smoother.ema_alpha == 0.5
         assert smoother.decay_frames == 5
+
+    def test_min_confidence_filter(self):
+        """Тест фильтрации по минимальной уверенности."""
+        smoother = TrackSmoother(min_confidence=0.8)
+
+        # Детекция с низкой уверенностью
+        det_low = Detection(x1=0, y1=0, x2=100, y2=100, conf=0.5, track_id=1)
+        boxes = smoother.update([det_low], screen_w=1920, screen_h=1080)
+        assert len(boxes) == 0  # Должна быть проигнорирована
+
+        # Детекция с высокой уверенностью
+        det_high = Detection(x1=0, y1=0, x2=100, y2=100, conf=0.9, track_id=1)
+        boxes = smoother.update([det_high], screen_w=1920, screen_h=1080)
+        assert len(boxes) == 1  # Должна быть принята
+
+    def test_invalid_coordinates(self):
+        """Тест обработки некорректных координат."""
+        smoother = TrackSmoother()
+
+        # Некорректные координаты (x1 > x2)
+        det = Detection(x1=200, y1=100, x2=100, y2=200, conf=0.9, track_id=1)
+        boxes = smoother.update([det], screen_w=1920, screen_h=1080)
+        assert len(boxes) == 1
+        # Координаты должны быть исправлены (x1 <= x2)
+        assert boxes[0][0] <= boxes[0][2]
+        assert boxes[0][1] <= boxes[0][3]
+
+    def test_clipping(self):
+        """Тест клипирования координат к экрану."""
+        smoother = TrackSmoother()
+
+        # Координаты за пределами экрана
+        det = Detection(x1=-100, y1=-100, x2=800, y2=800, conf=0.9, track_id=1)
+        boxes = smoother.update([det], screen_w=1920, screen_h=1080)
+
+        # Должны быть обрезаны
+        assert boxes[0][0] >= 0
+        assert boxes[0][1] >= 0
+        assert boxes[0][2] <= 1920
+        assert boxes[0][3] <= 1080
+
+    def test_track_stats(self):
+        """Тест получения статистики треков."""
+        smoother = TrackSmoother()
+        det = Detection(x1=0, y1=0, x2=100, y2=100, conf=0.9, track_id=42)
+
+        smoother.update([det], screen_w=1920, screen_h=1080)
+
+        # Проверяем статистику
+        stats = smoother.get_track_stats(42)
+        assert stats is not None
+        assert stats.track_id == 42
+        assert stats.age == 0
+        assert stats.lifetime >= 0
+        assert stats.current_box is not None
+
+        # Проверяем общую статистику
+        general_stats = smoother.get_statistics()
+        assert general_stats["active_tracks"] == 1
+        assert general_stats["total_created"] == 1
+        assert general_stats["frames_processed"] == 1
+
+    def test_dynamic_params_update(self):
+        """Тест динамического обновления параметров."""
+        smoother = TrackSmoother(ema_alpha=0.5, decay_frames=10)
+
+        # Меняем параметры
+        smoother.set_params(ema_alpha=0.8, decay_frames=5, min_confidence=0.7)
+
+        assert smoother.ema_alpha == 0.8
+        assert smoother.decay_frames == 5
+        assert smoother.min_confidence == 0.7
+
+        # Меняем только один параметр
+        smoother.set_params(ema_alpha=0.3)
+        assert smoother.ema_alpha == 0.3
+        assert smoother.decay_frames == 5  # Не изменился
+
+    def test_scale_caching(self):
+        """Тест кэширования масштаба."""
+        smoother = TrackSmoother(enable_cache=True)
+        det = Detection(x1=0, y1=0, x2=100, y2=100, conf=0.9, track_id=1)
+
+        # Первый вызов - вычислит масштаб
+        boxes1 = smoother.update([det], screen_w=1920, screen_h=1080)
+
+        # Второй вызов с теми же параметрами - должен использовать кэш
+        boxes2 = smoother.update([det], screen_w=1920, screen_h=1080)
+
+        assert boxes1 == boxes2
+
+        # Проверяем, что кэш работает (обращаемся к внутреннему состоянию)
+        assert smoother._last_scale is not None
+
+        # Меняем параметры - кэш должен обновиться
+        smoother.update([det], screen_w=1280, screen_h=720)
+        assert smoother._last_scale[0] == 1280 / 640  # scale_x должен обновиться
+
+    def test_performance_with_many_tracks(self):
+        """Тест производительности с большим количеством треков."""
+        smoother = TrackSmoother()
+
+        # Создаём 100 треков
+        detections = [
+            Detection(x1=i*10, y1=i*10, x2=i*10+100, y2=i*10+100,
+                     conf=0.9, track_id=i)
+            for i in range(100)
+        ]
+
+        start_time = time.time()
+        boxes = smoother.update(detections, screen_w=1920, screen_h=1080)
+        elapsed_time = time.time() - start_time
+
+        assert len(boxes) == 100
+        assert elapsed_time < 0.1, f"Обновление 100 треков заняло {elapsed_time:.3f} секунд"
+
+    def test_ema_different_alphas(self):
+        """Тест EMA с разными значениями alpha."""
+        det = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+
+        # Alpha = 0.0 - не должно меняться
+        smoother_static = TrackSmoother(ema_alpha=0.0)
+        smoother_static.update([det], screen_w=1920, screen_h=1080)
+        boxes = smoother_static.update([det], screen_w=1920, screen_h=1080)
+        first_value = boxes[0][0]
+        for _ in range(10):
+            boxes = smoother_static.update([det], screen_w=1920, screen_h=1080)
+            assert boxes[0][0] == first_value, "При alpha=0.0 значение не должно меняться"
+
+        # Alpha = 1.0 - должно мгновенно обновляться
+        smoother_instant = TrackSmoother(ema_alpha=1.0)
+        for _ in range(10):
+            boxes = smoother_instant.update([det], screen_w=1920, screen_h=1080)
+            assert boxes[0][0] == 300, "При alpha=1.0 значение должно быть точным"
 
 
 if __name__ == "__main__":
