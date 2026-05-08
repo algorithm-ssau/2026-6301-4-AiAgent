@@ -54,7 +54,7 @@ class WindowsOverlay(OverlayBase):
                         win32con.WS_EX_NOACTIVATE)
 
             style = win32con.WS_POPUP
-            ex_style = 0
+
 
             self._hwnd = win32gui.CreateWindowEx(
                 ex_style,
