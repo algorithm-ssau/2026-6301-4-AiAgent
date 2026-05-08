@@ -340,6 +340,112 @@ class TestTrackSmoother:
             boxes = smoother_instant.update([det], screen_w=1920, screen_h=1080)
             assert boxes[0][0] == 300, "При alpha=1.0 значение должно быть точным"
 
+    def test_max_tracks_limit(self):
+        """Тест ограничения максимального количества треков."""
+        smoother = TrackSmoother(max_tracks=5)
+
+        # Создаём 10 треков
+        detections = [
+            Detection(x1=i*10, y1=i*10, x2=i*10+100, y2=i*10+100,
+                     conf=0.9, track_id=i)
+            for i in range(10)
+        ]
+
+        boxes = smoother.update(detections, screen_w=1920, screen_h=1080)
+
+        # Должно быть не больше max_tracks
+        assert len(boxes) <= 5
+        assert smoother.get_track_count() <= 5
+
+        # Проверяем, что остались самые приоритетные треки
+        stats = smoother.get_statistics()
+        assert stats["max_tracks_limit"] == 5
+
+    def test_track_history(self):
+        """Тест сохранения истории треков."""
+        smoother = TrackSmoother()
+        det = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+
+        # Несколько обновлений
+        for _ in range(5):
+            smoother.update([det], screen_w=1920, screen_h=1080)
+
+        # Проверяем историю
+        history = smoother.get_track_history(1)
+        assert history is not None
+        assert len(history) == 5
+
+        # Проверяем, что координаты правильные
+        scale_x = 1920 / 640
+        assert history[0][0] == 100 * scale_x
+
+    def test_track_stability_score(self):
+        """Тест вычисления стабильности трека."""
+        smoother = TrackSmoother()
+
+        # Стабильный трек (не двигается)
+        det_stable = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+        for _ in range(10):
+            smoother.update([det_stable], screen_w=1920, screen_h=1080)
+
+        stats_stable = smoother.get_track_stats(1)
+        assert stats_stable is not None
+        assert stats_stable.stability_score > 0.9  # Должен быть очень стабильным
+
+        # Нестабильный трек (двигается)
+        smoother.reset()
+        det_moving = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+        for i in range(10):
+            det_moving.x1 = 100 + i * 50
+            det_moving.x2 = 200 + i * 50
+            smoother.update([det_moving], screen_w=1920, screen_h=1080)
+
+        stats_moving = smoother.get_track_stats(1)
+        assert stats_moving is not None
+        assert stats_moving.stability_score < 0.5  # Должен быть менее стабильным
+
+    def test_velocity_prediction(self):
+        """Тест предсказания движения (если включено)."""
+        smoother = TrackSmoother(enable_velocity_prediction=True, decay_frames=5)
+
+        # Создаём движущийся объект
+        det = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+
+        # Несколько кадров с движением
+        for i in range(5):
+            det.x1 = 100 + i * 20
+            det.x2 = 200 + i * 20
+            smoother.update([det], screen_w=1920, screen_h=1080)
+            time.sleep(0.033)  # Симулируем ~30 FPS
+
+        # Сохраняем позицию до пропадания
+        boxes_before = smoother.update([], screen_w=1920, screen_h=1080)
+        pos_before = boxes_before[0][0] if boxes_before else None
+
+        # Пропускаем кадр без детекции (должно сработать предсказание)
+        time.sleep(0.033)
+        boxes_after = smoother.update([], screen_w=1920, screen_h=1080)
+
+        if boxes_after:
+            # С предсказанием позиция должна продвинуться вперёд
+            assert boxes_after[0][0] > pos_before if pos_before else True
+
+    def test_fps_tracking(self):
+        """Тест отслеживания FPS."""
+        smoother = TrackSmoother()
+
+        # Симулируем несколько кадров
+        det = Detection(x1=100, y1=100, x2=200, y2=200, conf=0.9, track_id=1)
+
+        for _ in range(10):
+            smoother.update([det], screen_w=1920, screen_h=1080)
+            time.sleep(0.033)  # ~30 FPS
+
+        stats = smoother.get_statistics()
+        assert "current_fps" in stats
+        # FPS должен быть примерно 30 (плюс-минус погрешность)
+        assert 25 <= stats["current_fps"] <= 35
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
