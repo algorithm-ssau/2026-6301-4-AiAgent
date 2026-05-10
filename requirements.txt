@@ -1,0 +1,7 @@
+ultralytics>=8.3.0
+onnxruntime>=1.18.0
+opencv-python>=4.10.0
+numpy>=1.26.0
+mss>=9.0.1
+pywin32>=306; sys_platform=="win32"
+pytest>=8.0.0
