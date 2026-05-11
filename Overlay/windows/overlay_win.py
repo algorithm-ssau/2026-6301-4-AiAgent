@@ -1,52 +1,51 @@
 """
-Windows оверлей с использованием pywin32
+Windows оверлей с отрисовкой рамок (без заливки)
 """
-import ctypes
-
-import win32api
-import win32con
-import win32gui
 import threading
 import time
 from typing import List, Tuple
 
-from Overlay.base import OverlayBase, Box
+import win32api
+import win32con
+import win32gui
 
-# Пользовательское сообщение для обновления оверлея из другого потока
-WM_APP_UPDATE = win32con.WM_APP + 1
 
-class WindowsOverlay(OverlayBase):
-    """Windows оверлей с прозрачным окном поверх всех приложений"""
+Box = Tuple[int, int, int, int]
+
+
+class WindowsOverlay:
+    """Windows оверлей с прозрачным окном и отрисовкой рамок"""
 
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height
-
-        # Параметры окна
         self._hwnd = None
-        self._hdc = None  # Контекст устройства
-        self._hbitmap = None  # Handle битмапа
-        self._bits = None  # Указатель на пиксельные данные
         self._running = False
         self._thread = None
-
-        # Потокобезопасные данные
         self._lock = threading.Lock()
         self._boxes: List[Box] = []
-        self._update_pending = False  # Флаг для предотвращения множественных обновлений
+
+        # Цвет рамки (зеленый в формате RGB)
+        self._pen_color = (0, 255, 0)
+        self._pen_width = 3
 
     def start(self) -> None:
-        """Создать окно и запустить рендер-цикл в отдельном потоке."""
+        """Создать окно"""
         try:
             # Регистрируем класс окна
             wc = win32gui.WNDCLASS()
             wc.lpfnWndProc = self._window_procedure
-            wc.lpszClassName = "AlcoholCensorOverlay"
+            self._class_name = f"AlcoholCensorOverlay_{id(self)}"
+            wc.lpszClassName = self._class_name
             wc.hInstance = win32api.GetModuleHandle(None)
+            wc.hbrBackground = win32gui.GetStockObject(win32con.NULL_BRUSH)  # Прозрачный фон
 
-            class_atom = win32gui.RegisterClass(wc)
-            if not class_atom:
-                raise RuntimeError("Не удалось зарегистрировать класс окна")
+            try:
+                win32gui.RegisterClass(wc)
+            except win32gui.error as e:
+                # 1410 = класс окна уже существует
+                if e.winerror != 1410:
+                    raise
 
             ex_style = (win32con.WS_EX_LAYERED |
                         win32con.WS_EX_TRANSPARENT |
@@ -55,10 +54,9 @@ class WindowsOverlay(OverlayBase):
 
             style = win32con.WS_POPUP
 
-
             self._hwnd = win32gui.CreateWindowEx(
                 ex_style,
-                "AlcoholCensorOverlay",
+                self._class_name,
                 "Alcohol Censor Overlay",
                 style,
                 0, 0, self.width, self.height,
@@ -68,179 +66,116 @@ class WindowsOverlay(OverlayBase):
             if not self._hwnd:
                 raise RuntimeError("Не удалось создать окно")
 
-            self._create_dib_section()
+            # Устанавливаем прозрачность (ключевой цвет - черный)
+            win32gui.SetLayeredWindowAttributes(
+                self._hwnd,
+                0,  # черный цвет будет прозрачным
+                0,  # альфа не используется при LWA_COLORKEY
+                win32con.LWA_COLORKEY  # используем цветовой ключ вместо альфа
+            )
 
-            # Запускаем поток обработки сообщений
+            # Делаем окно кликабельным (пропускаем клики)
+            win32gui.SetWindowLong(
+                self._hwnd,
+                win32con.GWL_EXSTYLE,
+                win32gui.GetWindowLong(self._hwnd, win32con.GWL_EXSTYLE) | win32con.WS_EX_TRANSPARENT
+            )
+
+            win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
+
             self._running = True
             self._thread = threading.Thread(target=self._message_loop, daemon=True)
             self._thread.start()
 
-            print(f"Оверлей с DIBSection запущен: {self.width}x{self.height}")
+            print(f"Оверлей запущен: {self.width}x{self.height}")
 
         except Exception as e:
             print(f"Ошибка запуска оверлея: {e}")
-            self._running = False
+            raise
 
     def stop(self) -> None:
-        """Завершить поток и закрыть окно."""
+        """Закрыть окно"""
         self._running = False
-
         if self._hwnd:
-            win32gui.PostMessage(self._hwnd, win32con.WM_QUIT, 0, 0)
-            time.sleep(0.1)
             win32gui.DestroyWindow(self._hwnd)
             self._hwnd = None
-
-        if self._hbitmap:
-            win32gui.DeleteObject(self._hbitmap)
-            self._hbitmap = None
-
-        if self._hdc:
-            win32gui.DeleteDC(self._hdc)
-            self._hdc = None
-
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.0)
-
         print("Оверлей остановлен")
 
     def update_boxes(self, boxes: List[Box]) -> None:
-        """Обновить список прямоугольников. Вызывается из любого потока."""
+        """Обновить список боксов и вызвать перерисовку"""
         with self._lock:
             self._boxes = list(boxes)
-
-        # Отправляем сообщение в поток окна для перерисовки
+        # Принудительно перерисовываем окно
         if self._hwnd:
-            win32gui.PostMessage(self._hwnd, WM_APP_UPDATE, 0, 0)
+            win32gui.InvalidateRect(self._hwnd, None, True)
+            win32gui.UpdateWindow(self._hwnd)
 
-    def is_running(self) -> bool:
-        """Возвращает True, если рендер-поток жив."""
-        return self._running and self._thread and self._thread.is_alive()
-
-    def _create_dib_section(self):
-        screen_dc = win32gui.GetDC(0)
-        try:
-            self._hdc =win32gui.CreateCompatibleDC(screen_dc)
-
-            # Настройки 32-bit битмапа
-            bi = win32gui.BITMAPINFO()
-            bi.bmiHeader.biSize = win32gui.GetBitmapInfoHeaderSize()
-            bi.bmiHeader.biWidth = self.width
-            bi.bmiHeader.biHeight = -self.height  # Отрицательная = сверху вниз
-            bi.bmiHeader.biPlanes = 1
-            bi.bmiHeader.biBitCount = 32
-            bi.bmiHeader.biCompression = win32con.BI_RGB
-            bi.bmiHeader.biSizeImage = 0
-            # Создаём DIBSection и получаем указатель на пиксели
-            self._hbitmap, self._bits = win32gui.CreateDIBSection(
-                screen_dc, bi, win32con.DIB_RGB_COLORS, None, 0, 0
-            )
-
-            if not self._hbitmap:
-                raise RuntimeError("Не удалось создать DIBSection")
-
-            win32gui.SelectObject(self._hdc, self._hbitmap)
-            self._clear_bitmap()
-
-        finally:
-            win32gui.ReleaseDC(0, screen_dc)
-
-    def _clear_bitmap(self):
-        """Очистка битмапа (заполнение прозрачным цветом)."""
-        if self._bits:
-            bitmap_size = self.width * self.height * 4
-            ctypes.memset(self._bits, 0, bitmap_size)
-
-    def _draw_rectangle(self, x1: int, y1: int, x2: int, y2: int, r: int, g: int, b: int):
-        """Рисование прямоугольника на битмапе."""
-        if not self._bits:
+    def _draw_rectangles(self, hdc):
+        """Нарисовать прямоугольники на контексте устройства"""
+        if not hdc:
             return
 
-        x1 = max(0, min(x1, self.width - 1))
-        y1 = max(0, min(y1, self.height - 1))
-        x2 = max(0, min(x2, self.width - 1))
-        y2 = max(0, min(y2, self.height - 1))
-
-        if x1 >= x2 or y1 >= y2:
-            return
-
-        color = (255 << 24) | (r << 16) | (g << 8) | b
-        bits_ptr = ctypes.cast(self._bits, ctypes.POINTER(ctypes.c_uint32))
-
-        thickness = 3
-
-        # Вертикальные линии
-        for offset in range(thickness):
-            left_x = x1 + offset
-            right_x = x2 - offset
-            if left_x >= self.width or right_x < 0:
-                continue
-            for y in range(y1, y2 + 1):
-                if 0 <= y < self.height:
-                    if 0 <= left_x < self.width:
-                        idx = y * self.width + left_x
-                        bits_ptr[idx] = color
-                    if 0 <= right_x < self.width and right_x != left_x:
-                        idx = y * self.width + right_x
-                        bits_ptr[idx] = color
-
-        # Горизонтальные линии
-        for offset in range(thickness):
-            top_y = y1 + offset
-            bottom_y = y2 - offset
-            if top_y >= self.height or bottom_y < 0:
-                continue
-            for x in range(x1, x2 + 1):
-                if 0 <= x < self.width:
-                    if 0 <= top_y < self.height:
-                        idx = top_y * self.width + x
-                        bits_ptr[idx] = color
-                    if 0 <= bottom_y < self.height and bottom_y != top_y:
-                        idx = bottom_y * self.width + x
-                        bits_ptr[idx] = color
-
-    def _render(self):
-        """Отрисовка всех рамок на битмапе и обновление окна."""
-        self._clear_bitmap()
-
-        # Копируем данные с блокировкой
         with self._lock:
             boxes = list(self._boxes)
 
-        # Рисуем все рамки (зелёным цветом)
-        for box in boxes:
-            x1, y1, x2, y2 = box
-            self._draw_rectangle(x1, y1, x2, y2, 0, 255, 0)
-
-        self._update_layered_window()
-
-    def _update_layered_window(self):
-        """Обновление layered окна с новым содержимым через UpdateLayeredWindow."""
-        if not self._hwnd or not self._hdc:
+        if not boxes:
             return
 
-        pt = (0, 0)
-        size = (self.width, self.height)
-
-        blend = win32api.BLENDFUNCTION()
-        blend.BlendOp = win32con.AC_SRC_OVER
-        blend.BlendFlags = 0
-        blend.SourceConstantAlpha = 255
-        blend.AlphaFormat = win32con.AC_SRC_ALPHA
-
         try:
-            win32gui.UpdateLayeredWindow(
-                self._hwnd, None, pt, size,
-                self._hdc, pt, 0, blend, win32con.ULW_ALPHA
+            # Создаем перо (кисть) для рисования
+            pen = win32gui.CreatePen(
+                win32con.PS_SOLID,  # сплошная линия
+                self._pen_width,  # толщина
+                win32api.RGB(self._pen_color[0], self._pen_color[1], self._pen_color[2])  # цвет
             )
+
+            # Выбираем перо в контекст
+            old_pen = win32gui.SelectObject(hdc, pen)
+
+
+            # Рисуем каждый прямоугольник ТОЛЬКО КОНТУР
+            for box in boxes:
+                if len(box) == 4:
+                    x1, y1, x2, y2 = box
+                    # Убеждаемся, что координаты в пределах окна
+                    x1 = max(0, min(x1, self.width))
+                    y1 = max(0, min(y1, self.height))
+                    x2 = max(0, min(x2, self.width))
+                    y2 = max(0, min(y2, self.height))
+
+                    if x1 < x2 and y1 < y2:
+                        # Рисуем только контур прямоугольника
+                        win32gui.MoveToEx(hdc, x1, y1)
+                        win32gui.LineTo(hdc, x2, y1)  # верхняя линия
+                        win32gui.LineTo(hdc, x2, y2)  # правая линия
+                        win32gui.LineTo(hdc, x1, y2)  # нижняя линия
+                        win32gui.LineTo(hdc, x1, y1)  # левая линия
+
+            # Восстанавливаем старые объекты
+            win32gui.SelectObject(hdc, old_pen)
+
+            # Удаляем созданное перо
+            win32gui.DeleteObject(pen)
+
         except Exception as e:
-            print(f"Ошибка UpdateLayeredWindow: {e}")
+            print(f"Ошибка рисования: {e}")
 
     def _window_procedure(self, hwnd, msg, wparam, lparam):
-        """Обработчик сообщений Win32 окна."""
-        if msg == WM_APP_UPDATE:
-            # Пришло сообщение об обновлении из другого потока
-            self._render()
+        """Обработчик сообщений"""
+        if msg == win32con.WM_PAINT:
+            # Начинаем рисование
+            hdc, paint_struct = win32gui.BeginPaint(hwnd)
+            try:
+                # Очищаем фон (делаем прозрачным)
+                # Создаем прямоугольник для всей области окна
+                rect = (0, 0, self.width, self.height)
+                # Заполняем черным цветом (который станет прозрачным через LWA_COLORKEY)
+                win32gui.PatBlt(hdc, 0, 0, self.width, self.height, win32con.BLACKNESS)
+                # Рисуем прямоугольники поверх
+                self._draw_rectangles(hdc)
+            finally:
+                # Завершаем рисование
+                win32gui.EndPaint(hwnd, paint_struct)
             return 0
 
         elif msg == win32con.WM_DESTROY:
@@ -248,22 +183,18 @@ class WindowsOverlay(OverlayBase):
             return 0
 
         elif msg == win32con.WM_ERASEBKGND:
+            # Возвращаем 1, чтобы не стирать фон
             return 1
 
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     def _message_loop(self):
-        """Цикл обработки сообщений Windows."""
+        """Цикл сообщений"""
         while self._running:
             try:
-                msg = win32gui.GetMessage(None, 0, 0)
-                if msg and msg[0] != 0:
-                    win32gui.TranslateMessage(msg[1])
-                    win32gui.DispatchMessage(msg[1])
-                else:
-                    # WM_QUIT получено
-                    break
+                win32gui.PumpWaitingMessages()
+                time.sleep(0.01)
             except Exception as e:
                 if self._running:
                     print(f"Ошибка в цикле сообщений: {e}")
-                    time.sleep(0.001)
+                    time.sleep(0.1)
