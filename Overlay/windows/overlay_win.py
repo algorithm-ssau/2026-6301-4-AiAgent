@@ -1,5 +1,5 @@
 """
-Windows оверлей с отрисовкой рамок (без заливки)
+Windows оверлей с отрисовкой черных прямоугольников
 """
 import threading
 import time
@@ -14,7 +14,7 @@ Box = Tuple[int, int, int, int]
 
 
 class WindowsOverlay:
-    """Windows оверлей с прозрачным окном и отрисовкой рамок"""
+    """Windows оверлей с прозрачным окном и черной заливкой"""
 
     def __init__(self, width: int, height: int):
         self.width = width
@@ -25,20 +25,20 @@ class WindowsOverlay:
         self._lock = threading.Lock()
         self._boxes: List[Box] = []
 
-        # Цвет рамки (зеленый в формате RGB)
-        self._pen_color = (0, 255, 0)
-        self._pen_width = 3
+        self._class_name = f"AlcoholCensorOverlay_{id(self)}"
+
+        # Цвет, который будет прозрачным.
+        # ВАЖНО: не черный, иначе черные прямоугольники тоже станут прозрачными.
+        self._transparent_color = win32api.RGB(255, 0, 255)
 
     def start(self) -> None:
         """Создать окно"""
         try:
-            # Регистрируем класс окна
             wc = win32gui.WNDCLASS()
             wc.lpfnWndProc = self._window_procedure
-            self._class_name = f"AlcoholCensorOverlay_{id(self)}"
             wc.lpszClassName = self._class_name
             wc.hInstance = win32api.GetModuleHandle(None)
-            wc.hbrBackground = win32gui.GetStockObject(win32con.NULL_BRUSH)  # Прозрачный фон
+            wc.hbrBackground = win32gui.GetStockObject(win32con.NULL_BRUSH)
 
             try:
                 win32gui.RegisterClass(wc)
@@ -47,10 +47,12 @@ class WindowsOverlay:
                 if e.winerror != 1410:
                     raise
 
-            ex_style = (win32con.WS_EX_LAYERED |
-                        win32con.WS_EX_TRANSPARENT |
-                        win32con.WS_EX_TOPMOST |
-                        win32con.WS_EX_NOACTIVATE)
+            ex_style = (
+                win32con.WS_EX_LAYERED
+                | win32con.WS_EX_TRANSPARENT
+                | win32con.WS_EX_TOPMOST
+                | win32con.WS_EX_NOACTIVATE
+            )
 
             style = win32con.WS_POPUP
 
@@ -59,29 +61,29 @@ class WindowsOverlay:
                 self._class_name,
                 "Alcohol Censor Overlay",
                 style,
-                0, 0, self.width, self.height,
-                None, None, wc.hInstance, None
+                0,
+                0,
+                self.width,
+                self.height,
+                None,
+                None,
+                wc.hInstance,
+                None,
             )
 
             if not self._hwnd:
-                raise RuntimeError("Не удалось создать окно")
+                raise RuntimeError("Не удалось создать окно оверлея")
 
-            # Устанавливаем прозрачность (ключевой цвет - черный)
+            # Фиолетовый цвет будет прозрачным.
             win32gui.SetLayeredWindowAttributes(
                 self._hwnd,
-                0,  # черный цвет будет прозрачным
-                0,  # альфа не используется при LWA_COLORKEY
-                win32con.LWA_COLORKEY  # используем цветовой ключ вместо альфа
-            )
-
-            # Делаем окно кликабельным (пропускаем клики)
-            win32gui.SetWindowLong(
-                self._hwnd,
-                win32con.GWL_EXSTYLE,
-                win32gui.GetWindowLong(self._hwnd, win32con.GWL_EXSTYLE) | win32con.WS_EX_TRANSPARENT
+                self._transparent_color,
+                0,
+                win32con.LWA_COLORKEY,
             )
 
             win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
+            win32gui.UpdateWindow(self._hwnd)
 
             self._running = True
             self._thread = threading.Thread(target=self._message_loop, daemon=True)
@@ -96,22 +98,33 @@ class WindowsOverlay:
     def stop(self) -> None:
         """Закрыть окно"""
         self._running = False
+
         if self._hwnd:
-            win32gui.DestroyWindow(self._hwnd)
+            try:
+                win32gui.DestroyWindow(self._hwnd)
+            except Exception:
+                pass
             self._hwnd = None
+
         print("Оверлей остановлен")
 
     def update_boxes(self, boxes: List[Box]) -> None:
         """Обновить список боксов и вызвать перерисовку"""
         with self._lock:
             self._boxes = list(boxes)
-        # Принудительно перерисовываем окно
-        if self._hwnd:
-            win32gui.InvalidateRect(self._hwnd, None, True)
-            win32gui.UpdateWindow(self._hwnd)
 
-    def _draw_rectangles(self, hdc):
-        """Нарисовать прямоугольники на контексте устройства"""
+        if self._hwnd:
+            try:
+                win32gui.InvalidateRect(self._hwnd, None, True)
+                win32gui.UpdateWindow(self._hwnd)
+            except Exception:
+                pass
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def _fill_rectangles(self, hdc):
+        """Нарисовать черные залитые прямоугольники"""
         if not hdc:
             return
 
@@ -121,61 +134,64 @@ class WindowsOverlay:
         if not boxes:
             return
 
+        brush = None
+        old_brush = None
+        old_pen = None
+
         try:
-            # Создаем перо (кисть) для рисования
-            pen = win32gui.CreatePen(
-                win32con.PS_SOLID,  # сплошная линия
-                self._pen_width,  # толщина
-                win32api.RGB(self._pen_color[0], self._pen_color[1], self._pen_color[2])  # цвет
-            )
+            brush = win32gui.CreateSolidBrush(win32api.RGB(0, 0, 0))
+            old_brush = win32gui.SelectObject(hdc, brush)
 
-            # Выбираем перо в контекст
-            old_pen = win32gui.SelectObject(hdc, pen)
+            # Убираем обводку, оставляем только заливку.
+            null_pen = win32gui.GetStockObject(win32con.NULL_PEN)
+            old_pen = win32gui.SelectObject(hdc, null_pen)
 
-
-            # Рисуем каждый прямоугольник ТОЛЬКО КОНТУР
             for box in boxes:
-                if len(box) == 4:
-                    x1, y1, x2, y2 = box
-                    # Убеждаемся, что координаты в пределах окна
-                    x1 = max(0, min(x1, self.width))
-                    y1 = max(0, min(y1, self.height))
-                    x2 = max(0, min(x2, self.width))
-                    y2 = max(0, min(y2, self.height))
+                if len(box) != 4:
+                    continue
 
-                    if x1 < x2 and y1 < y2:
-                        # Рисуем только контур прямоугольника
-                        win32gui.MoveToEx(hdc, x1, y1)
-                        win32gui.LineTo(hdc, x2, y1)  # верхняя линия
-                        win32gui.LineTo(hdc, x2, y2)  # правая линия
-                        win32gui.LineTo(hdc, x1, y2)  # нижняя линия
-                        win32gui.LineTo(hdc, x1, y1)  # левая линия
+                x1, y1, x2, y2 = box
 
-            # Восстанавливаем старые объекты
-            win32gui.SelectObject(hdc, old_pen)
+                x1 = max(0, min(int(x1), self.width))
+                y1 = max(0, min(int(y1), self.height))
+                x2 = max(0, min(int(x2), self.width))
+                y2 = max(0, min(int(y2), self.height))
 
-            # Удаляем созданное перо
-            win32gui.DeleteObject(pen)
+                if x1 < x2 and y1 < y2:
+                    win32gui.Rectangle(hdc, x1, y1, x2, y2)
 
         except Exception as e:
             print(f"Ошибка рисования: {e}")
 
+        finally:
+            try:
+                if old_pen:
+                    win32gui.SelectObject(hdc, old_pen)
+                if old_brush:
+                    win32gui.SelectObject(hdc, old_brush)
+                if brush:
+                    win32gui.DeleteObject(brush)
+            except Exception:
+                pass
+
     def _window_procedure(self, hwnd, msg, wparam, lparam):
         """Обработчик сообщений"""
         if msg == win32con.WM_PAINT:
-            # Начинаем рисование
             hdc, paint_struct = win32gui.BeginPaint(hwnd)
+
             try:
-                # Очищаем фон (делаем прозрачным)
-                # Создаем прямоугольник для всей области окна
+                # Заполняем фон прозрачным цветом.
+                bg_brush = win32gui.CreateSolidBrush(self._transparent_color)
                 rect = (0, 0, self.width, self.height)
-                # Заполняем черным цветом (который станет прозрачным через LWA_COLORKEY)
-                win32gui.PatBlt(hdc, 0, 0, self.width, self.height, win32con.BLACKNESS)
-                # Рисуем прямоугольники поверх
-                self._draw_rectangles(hdc)
+                win32gui.FillRect(hdc, rect, bg_brush)
+                win32gui.DeleteObject(bg_brush)
+
+                # Поверх рисуем черные залитые прямоугольники.
+                self._fill_rectangles(hdc)
+
             finally:
-                # Завершаем рисование
                 win32gui.EndPaint(hwnd, paint_struct)
+
             return 0
 
         elif msg == win32con.WM_DESTROY:
@@ -183,7 +199,6 @@ class WindowsOverlay:
             return 0
 
         elif msg == win32con.WM_ERASEBKGND:
-            # Возвращаем 1, чтобы не стирать фон
             return 1
 
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
