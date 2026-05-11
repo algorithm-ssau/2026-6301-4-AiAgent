@@ -47,15 +47,17 @@ class BottleDetector:
             device=self._device,
         )
         boxes = results[0].boxes
-        if boxes.id is None:
-            return []
         detections = []
-        for xyxy, conf, track_id in zip(boxes.xyxy, boxes.conf, boxes.id):
+        track_ids = boxes.id
+        if track_ids is None:
+            track_ids = [None] * len(boxes.xyxy)
+
+        for xyxy, conf, track_id in zip(boxes.xyxy, boxes.conf, track_ids):
             detections.append(Detection(
                 x1=int(xyxy[0]), y1=int(xyxy[1]),
                 x2=int(xyxy[2]), y2=int(xyxy[3]),
                 conf=float(conf),
-                track_id=int(track_id),
+                track_id=None if track_id is None else int(track_id),
             ))
         return detections
 

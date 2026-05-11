@@ -110,13 +110,15 @@ class WindowsOverlay:
 
     def update_boxes(self, boxes: List[Box]) -> None:
         """Обновить список боксов и вызвать перерисовку"""
+        new_boxes = list(boxes)
         with self._lock:
-            self._boxes = list(boxes)
+            if self._boxes == new_boxes:
+                return
+            self._boxes = new_boxes
 
         if self._hwnd:
             try:
-                win32gui.InvalidateRect(self._hwnd, None, True)
-                win32gui.UpdateWindow(self._hwnd)
+                win32gui.InvalidateRect(self._hwnd, None, False)
             except Exception:
                 pass
 
@@ -178,18 +180,39 @@ class WindowsOverlay:
         """Обработчик сообщений"""
         if msg == win32con.WM_PAINT:
             hdc, paint_struct = win32gui.BeginPaint(hwnd)
+            mem_dc = win32gui.CreateCompatibleDC(hdc)
+            bitmap = win32gui.CreateCompatibleBitmap(hdc, self.width, self.height)
+            old_bitmap = win32gui.SelectObject(mem_dc, bitmap)
 
             try:
                 # Заполняем фон прозрачным цветом.
                 bg_brush = win32gui.CreateSolidBrush(self._transparent_color)
                 rect = (0, 0, self.width, self.height)
-                win32gui.FillRect(hdc, rect, bg_brush)
+                win32gui.FillRect(mem_dc, rect, bg_brush)
                 win32gui.DeleteObject(bg_brush)
 
                 # Поверх рисуем черные залитые прямоугольники.
-                self._fill_rectangles(hdc)
+                self._fill_rectangles(mem_dc)
+                win32gui.BitBlt(
+                    hdc,
+                    0,
+                    0,
+                    self.width,
+                    self.height,
+                    mem_dc,
+                    0,
+                    0,
+                    win32con.SRCCOPY,
+                )
 
             finally:
+                try:
+                    win32gui.SelectObject(mem_dc, old_bitmap)
+                    win32gui.DeleteObject(bitmap)
+                    win32gui.DeleteDC(mem_dc)
+                except Exception:
+                    pass
+
                 win32gui.EndPaint(hwnd, paint_struct)
 
             return 0

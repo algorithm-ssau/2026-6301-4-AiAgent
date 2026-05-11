@@ -96,6 +96,7 @@ class TrackSmoother:
 
         # Для velocity prediction
         self._last_frame_time = time.time()
+        self._next_synthetic_track_id = -1
         self._frame_times = deque(maxlen=30)  # история времени кадров для FPS
 
     def _get_scale(self, screen_w: int, screen_h: int, input_w: int, input_h: int) -> Tuple[float, float]:
@@ -204,20 +205,88 @@ class TrackSmoother:
             True если детекцию нужно игнорировать
         """
         # Игнорируем детекции без track_id
-        if det.track_id is None:
-            return True
-
         # Игнорируем детекции с низкой уверенностью
         if det.conf < self.min_confidence:
             logger.debug(f"Игнорируем детекцию {det.track_id} с низкой уверенностью {det.conf:.2f}")
             return True
 
         # Проверяем валидность координат
-        if det.x1 >= det.x2 or det.y1 >= det.y2:
+        if det.x1 == det.x2 or det.y1 == det.y2:
             logger.warning(f"Некорректные координаты детекции {det.track_id}: ({det.x1}, {det.y1}, {det.x2}, {det.y2})")
             return True
 
         return False
+
+    def _box_iou(
+            self,
+            a: Tuple[float, float, float, float],
+            b: Tuple[float, float, float, float]
+    ) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+
+        inter_area = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter_area
+
+        return 0.0 if union <= 0 else inter_area / union
+
+    def _center_distance(
+            self,
+            a: Tuple[float, float, float, float],
+            b: Tuple[float, float, float, float]
+    ) -> float:
+        ax = (a[0] + a[2]) / 2
+        ay = (a[1] + a[3]) / 2
+        bx = (b[0] + b[2]) / 2
+        by = (b[1] + b[3]) / 2
+
+        return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+    def _find_matching_track(
+            self,
+            box: Tuple[float, float, float, float],
+            updated_tracks: set
+    ) -> Optional[int]:
+        best_track_id = None
+        best_iou = 0.0
+        best_distance = float("inf")
+
+        box_w = max(1.0, box[2] - box[0])
+        box_h = max(1.0, box[3] - box[1])
+        max_distance = max(80.0, (box_w ** 2 + box_h ** 2) ** 0.5 * 0.75)
+
+        for track_id, track in self._tracks.items():
+            if track_id in updated_tracks:
+                continue
+
+            track_box = (track.x1, track.y1, track.x2, track.y2)
+            iou = self._box_iou(box, track_box)
+            distance = self._center_distance(box, track_box)
+
+            if iou > best_iou or (best_iou == 0.0 and distance < best_distance):
+                best_track_id = track_id
+                best_iou = iou
+                best_distance = distance
+
+        if best_track_id is None:
+            return None
+
+        if best_iou >= 0.15 or best_distance <= max_distance:
+            return best_track_id
+
+        return None
+
+    def _new_synthetic_track_id(self) -> int:
+        track_id = self._next_synthetic_track_id
+        self._next_synthetic_track_id -= 1
+        return track_id
 
     def _log_statistics_if_needed(self):
         """Периодически логировать статистику."""
@@ -299,15 +368,32 @@ class TrackSmoother:
                 continue
 
             # Проецируем в экранные координаты
-            x1_screen = int(det.x1 * scale_x) + monitor_left
-            y1_screen = int(det.y1 * scale_y) + monitor_top
-            x2_screen = int(det.x2 * scale_x) + monitor_left
-            y2_screen = int(det.y2 * scale_y) + monitor_top
+            det_x1 = min(det.x1, det.x2)
+            det_y1 = min(det.y1, det.y2)
+            det_x2 = max(det.x1, det.x2)
+            det_y2 = max(det.y1, det.y2)
+
+            x1_screen = int(det_x1 * scale_x) + monitor_left
+            y1_screen = int(det_y1 * scale_y) + monitor_top
+            x2_screen = int(det_x2 * scale_x) + monitor_left
+            y2_screen = int(det_y2 * scale_y) + monitor_top
+
+            box = (float(x1_screen), float(y1_screen), float(x2_screen), float(y2_screen))
+            track_id = det.track_id
+            if track_id is None:
+                track_id = self._find_matching_track(box, updated_tracks)
+                if track_id is None:
+                    track_id = self._new_synthetic_track_id()
+            elif track_id not in self._tracks:
+                matching_track_id = self._find_matching_track(box, updated_tracks)
+                if matching_track_id is not None and matching_track_id < 0:
+                    self._tracks[track_id] = self._tracks.pop(matching_track_id)
+                    self._tracks[track_id].track_id = track_id
 
             # Обновляем или создаём трек
-            if det.track_id in self._tracks:
+            if track_id in self._tracks:
                 # Существующий трек — применяем EMA
-                track = self._tracks[det.track_id]
+                track = self._tracks[track_id]
                 old_box = (track.x1, track.y1, track.x2, track.y2)
 
                 track.x1 = self._apply_ema(x1_screen, track.x1)
@@ -321,7 +407,7 @@ class TrackSmoother:
                 track.history.append((track.x1, track.y1, track.x2, track.y2))
                 track.confidence_history.append(det.conf)
 
-                updated_tracks.add(det.track_id)
+                updated_tracks.add(track_id)
 
                 # Логируем значительные изменения
                 if abs(track.x1 - old_box[0]) > 100 or abs(track.y1 - old_box[1]) > 100:
@@ -339,15 +425,17 @@ class TrackSmoother:
                     x2=float(x2_screen),
                     y2=float(y2_screen),
                     age=0,
-                    track_id=det.track_id
+                    track_id=track_id
                 )
                 new_track.history.append((float(x1_screen), float(y1_screen),
                                          float(x2_screen), float(y2_screen)))
                 new_track.confidence_history.append(det.conf)
 
-                self._tracks[det.track_id] = new_track
-                updated_tracks.add(det.track_id)
+                self._tracks[track_id] = new_track
+                updated_tracks.add(track_id)
                 self._total_tracks_created += 1
+                if len(self._tracks) > self.max_tracks:
+                    self._prune_old_tracks()
                 logger.info(f"Создан новый трек {det.track_id} с уверенностью {det.conf:.2f}")
 
         # Шаг 4: Применить velocity prediction для пропавших треков

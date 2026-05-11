@@ -27,3 +27,8 @@ Thumbs.db
 
 # Pytest
 .pytest_cache/
+
+dist/
+build/
+*.exe
+*.pkg

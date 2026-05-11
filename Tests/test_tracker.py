@@ -143,8 +143,8 @@ class TestTrackSmoother:
         assert smoother.get_track_ids() == [42]
         assert len(boxes) == 1
 
-    def test_ignore_track_id_none(self):
-        """Тест игнорирования детекций без track_id."""
+    def test_accept_track_id_none(self):
+        """Тест обработки детекций без track_id."""
         smoother = TrackSmoother()
         dets = [
             Detection(x1=0, y1=0, x2=100, y2=100, conf=0.9, track_id=1),
@@ -153,14 +153,15 @@ class TestTrackSmoother:
 
         boxes = smoother.update(dets, screen_w=1920, screen_h=1080)
 
-        # Должен быть только 1 трек (с track_id=1)
-        assert len(boxes) == 1
+        assert len(boxes) == 2
 
         # Проверяем, что это первый трек
         scale_x = 1920 / 640
         scale_y = 1080 / 640
         assert boxes[0][0] == int(0 * scale_x)
         assert boxes[0][1] == int(0 * scale_y)
+        assert boxes[1][0] == int(200 * scale_x)
+        assert boxes[1][1] == int(200 * scale_y)
 
     def test_monitor_offset(self):
         """Тест учёта смещения монитора."""

@@ -1,6 +1,5 @@
 ﻿import os
 import sys
-import time
 import queue
 import threading
 from pathlib import Path
@@ -30,6 +29,7 @@ class CensorApp:
         self.monitor_index = tk.IntVar(value=1)
 
         self._running = False
+        self._starting = False
         self._stop_event = None
 
         self._capturer = None
@@ -124,12 +124,18 @@ class CensorApp:
             self.model_path.set(file_path)
 
     def _toggle(self):
+        if self._starting:
+            return
+
         if self._running:
             self._stop_censorship()
         else:
             self._start_censorship()
 
     def _start_censorship(self):
+        if self._running or self._starting:
+            return
+
         model = Path(self.model_path.get())
 
         if not model.exists():
@@ -137,7 +143,11 @@ class CensorApp:
             return
 
         try:
+            self._starting = True
             self._set_controls_state("disabled")
+            self.toggle_button.config(state="disabled", text="Запуск...")
+            self.status_label.config(text="Статус: запускается...")
+            self.root.update_idletasks()
 
             self._stop_event = threading.Event()
             self._frame_queue = queue.Queue(maxsize=2)
@@ -164,7 +174,7 @@ class CensorApp:
 
             self._smoother = TrackSmoother(
                 ema_alpha=0.6,
-                decay_frames=10,
+                decay_frames=6,
                 min_confidence=float(self.conf_value.get()),
             )
 
@@ -186,7 +196,7 @@ class CensorApp:
             self._capture_thread.start()
             self._pipeline_thread.start()
 
-            self.toggle_button.config(text="Выключить цензуру")
+            self.toggle_button.config(state="normal", text="Выключить цензуру")
             self.status_label.config(text="Статус: работает")
 
         except Exception as e:
@@ -194,8 +204,15 @@ class CensorApp:
             self._set_controls_state("normal")
             self._safe_cleanup()
             messagebox.showerror("Ошибка запуска", str(e))
+        finally:
+            self._starting = False
+            if not self._running:
+                self.toggle_button.config(state="normal", text="Включить цензуру")
 
     def _stop_censorship(self):
+        if self._starting:
+            return
+
         self.status_label.config(text="Статус: выключается...")
         self.root.update_idletasks()
 
