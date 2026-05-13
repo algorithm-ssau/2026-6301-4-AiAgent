@@ -2,6 +2,7 @@
 import sys
 import queue
 import threading
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -25,7 +26,7 @@ class CensorApp:
             value=str(self.project_dir / "Models" / "best.onnx")
         )
 
-        self.conf_value = tk.DoubleVar(value=0.25)  # Уменьшен порог для маленьких объектов
+        self.conf_value = tk.DoubleVar(value=0.20)  # Низкий порог для лучшей стабильности
         self.monitor_index = tk.IntVar(value=1)
 
         self._running = False
@@ -41,6 +42,10 @@ class CensorApp:
         self._frame_queue = None
         self._capture_thread = None
         self._pipeline_thread = None
+
+        # Буфер для усреднения детекций (устранение мерцания)
+        self._detection_buffer = []
+        self._buffer_size = 3  # Усредняем 3 кадра
 
         self._build_ui()
         self._update_fps_label()
@@ -65,7 +70,7 @@ class CensorApp:
         self.conf_scale = tk.Scale(
             frame,
             from_=0.10,
-            to=0.90,
+            to=0.50,
             resolution=0.05,
             orient="horizontal",
             variable=self.conf_value,
@@ -103,7 +108,7 @@ class CensorApp:
 
         self.info_label = tk.Label(
             frame,
-            text="Рекомендации: порог 0.20-0.30 для лучшей детекции мелких объектов",
+            text="Совет: порог 0.15-0.25. Оверлей держит боксы 0.5 сек после пропажи",
             fg="gray",
         )
         self.info_label.grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 0))
@@ -152,6 +157,9 @@ class CensorApp:
             self._stop_event = threading.Event()
             self._frame_queue = queue.Queue(maxsize=2)
 
+            # Очищаем буфер детекций
+            self._detection_buffer = []
+
             self._fps_counter = FpsCounter()
 
             self._capturer = ScreenCapturer(
@@ -172,15 +180,20 @@ class CensorApp:
                 device="auto",
             )
 
+            # Упрощенный трекер - только преобразование координат
             self._smoother = TrackSmoother(
-                ema_alpha=0.6,  # Уменьшен для более плавного движения
-                decay_frames=8,  # Увеличен - дольше держит пропавшие объекты
-                min_confidence=0.2,  # Нижний порог
-                max_tracks=50,
-                min_box_size=1,  # Минимальный размер бокса
+                ema_alpha=0.5,
+                min_confidence=float(self.conf_value.get()),
             )
 
-            self._overlay = WindowsOverlay(screen_w, screen_h)
+            # Оверлей с АГРЕССИВНЫМ удержанием (0.5 секунды)
+            self._overlay = WindowsOverlay(
+                screen_w,
+                screen_h,
+                update_rate=24,
+                hold_seconds=0.5,  # Держим бокс 0.5 секунды после пропажи
+                fade_seconds=0.2
+            )
             self._overlay.start()
 
             self._capture_thread = threading.Thread(
@@ -255,6 +268,7 @@ class CensorApp:
         self._fps_counter = None
         self._frame_queue = None
         self._stop_event = None
+        self._detection_buffer = []
 
         self.toggle_button.config(text="Включить цензуру")
         self.status_label.config(text="Статус: выключено")
@@ -278,7 +292,69 @@ class CensorApp:
                 self.root.after(0, self._show_worker_error, f"Ошибка захвата экрана: {e}")
                 break
 
+    def _merge_detections(self, detections_list):
+        """
+        Объединить детекции из нескольких кадров (медианный фильтр для устранения мерцания)
+        """
+        if not detections_list:
+            return []
+
+        # Собираем все боксы со всех кадров
+        all_boxes = []
+        for detections in detections_list:
+            for det in detections:
+                all_boxes.append(det)
+
+        if not all_boxes:
+            return []
+
+        # Группируем похожие боксы по позиции
+        merged = []
+        used = [False] * len(all_boxes)
+
+        for i, box1 in enumerate(all_boxes):
+            if used[i]:
+                continue
+
+            similar = [box1]
+            center1 = ((box1.x1 + box1.x2) / 2, (box1.y1 + box1.y2) / 2)
+
+            for j, box2 in enumerate(all_boxes[i + 1:], i + 1):
+                if used[j]:
+                    continue
+
+                center2 = ((box2.x1 + box2.x2) / 2, (box2.y1 + box2.y2) / 2)
+                distance = ((center1[0] - center2[0]) ** 2 + (center1[1] - center2[1]) ** 2) ** 0.5
+
+                if distance < 50:  # Близкие боксы
+                    similar.append(box2)
+                    used[j] = True
+
+            if similar:
+                # Усредняем координаты
+                avg_x1 = sum(b.x1 for b in similar) / len(similar)
+                avg_y1 = sum(b.y1 for b in similar) / len(similar)
+                avg_x2 = sum(b.x2 for b in similar) / len(similar)
+                avg_y2 = sum(b.y2 for b in similar) / len(similar)
+                avg_conf = sum(b.conf for b in similar) / len(similar)
+
+                from Core.detector import Detection
+                merged.append(Detection(
+                    x1=int(avg_x1), y1=int(avg_y1),
+                    x2=int(avg_x2), y2=int(avg_y2),
+                    conf=avg_conf, track_id=None
+                ))
+
+            used[i] = True
+
+        return merged
+
     def _pipeline_loop(self, screen_w, screen_h, monitor_left, monitor_top):
+        """Основной pipeline обработки с буферизацией для устранения мерцания"""
+        frame_counter = 0
+        last_print_time = time.time()
+        debug = False  # Включите True для отладки в консоль
+
         while self._stop_event and not self._stop_event.is_set():
             try:
                 try:
@@ -286,9 +362,35 @@ class CensorApp:
                 except queue.Empty:
                     continue
 
-                # Детекция (внутри детектор сам сделает правильный ресайз)
+                frame_counter += 1
+
+                # Получаем детекции
                 detections = self._detector.track(frame)
 
+                # Отладка
+                if debug:
+                    current_time = time.time()
+                    if current_time - last_print_time > 2.0:
+                        print(f"[DEBUG] Кадр {frame_counter}: найдено {len(detections)} объектов")
+                        for d in detections:
+                            print(f"  - Бутылка: conf={d.conf:.2f}")
+                        last_print_time = current_time
+
+                # БУФЕРИЗАЦИЯ: накапливаем детекции за несколько кадров
+                self._detection_buffer.append(detections)
+                if len(self._detection_buffer) > self._buffer_size:
+                    self._detection_buffer.pop(0)
+
+                # УСРЕДНЕНИЕ: объединяем детекции из буфера
+                if len(self._detection_buffer) >= 2:
+                    detections = self._merge_detections(self._detection_buffer)
+
+                # Обновляем порог уверенности в трекере
+                current_conf = float(self.conf_value.get())
+                if hasattr(self._smoother, 'min_confidence') and self._smoother.min_confidence != current_conf:
+                    self._smoother.min_confidence = current_conf
+
+                # Преобразуем в экранные координаты
                 boxes = self._smoother.update(
                     detections=detections,
                     screen_w=screen_w,
@@ -299,6 +401,7 @@ class CensorApp:
                     input_h=frame.shape[0],
                 )
 
+                # Отправляем в оверлей (он сам решит, что рисовать, с учетом удержания)
                 if self._overlay:
                     self._overlay.update_boxes(boxes)
 
@@ -306,6 +409,7 @@ class CensorApp:
                     self._fps_counter.tick()
 
             except Exception as e:
+                print(f"[ERROR] {e}")
                 self.root.after(0, self._show_worker_error, f"Ошибка обработки кадра: {e}")
                 break
 
@@ -356,6 +460,7 @@ class CensorApp:
         self._capture_thread = None
         self._pipeline_thread = None
         self._stop_event = None
+        self._detection_buffer = []
 
     def _set_controls_state(self, state):
         self.model_entry.config(state=state)
