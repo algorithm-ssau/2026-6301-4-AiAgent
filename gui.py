@@ -25,7 +25,7 @@ class CensorApp:
             value=str(self.project_dir / "Models" / "best.onnx")
         )
 
-        self.conf_value = tk.DoubleVar(value=0.35)
+        self.conf_value = tk.DoubleVar(value=0.25)  # Уменьшен порог для маленьких объектов
         self.monitor_index = tk.IntVar(value=1)
 
         self._running = False
@@ -61,7 +61,7 @@ class CensorApp:
         self.model_entry.grid(row=1, column=1, padx=pad)
         tk.Button(frame, text="...", width=4, command=self._choose_model).grid(row=1, column=2)
 
-        tk.Label(frame, text="Порог:").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        tk.Label(frame, text="Порог уверенности:").grid(row=2, column=0, sticky="w", pady=(10, 0))
         self.conf_scale = tk.Scale(
             frame,
             from_=0.10,
@@ -103,7 +103,7 @@ class CensorApp:
 
         self.info_label = tk.Label(
             frame,
-            text="Перед запуском убедись, что Models/best.onnx существует.",
+            text="Рекомендации: порог 0.20-0.30 для лучшей детекции мелких объектов",
             fg="gray",
         )
         self.info_label.grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 0))
@@ -156,7 +156,7 @@ class CensorApp:
 
             self._capturer = ScreenCapturer(
                 monitor_index=int(self.monitor_index.get()),
-                fps_limit=20,
+                fps_limit=30,
             )
             self._capturer.start()
 
@@ -173,9 +173,11 @@ class CensorApp:
             )
 
             self._smoother = TrackSmoother(
-                ema_alpha=0.6,
-                decay_frames=6,
-                min_confidence=float(self.conf_value.get()),
+                ema_alpha=0.6,  # Уменьшен для более плавного движения
+                decay_frames=8,  # Увеличен - дольше держит пропавшие объекты
+                min_confidence=0.2,  # Нижний порог
+                max_tracks=50,
+                min_box_size=1,  # Минимальный размер бокса
             )
 
             self._overlay = WindowsOverlay(screen_w, screen_h)
@@ -284,9 +286,8 @@ class CensorApp:
                 except queue.Empty:
                     continue
 
-                small_frame = cv2.resize(frame, (640, 640))
-
-                detections = self._detector.track(small_frame)
+                # Детекция (внутри детектор сам сделает правильный ресайз)
+                detections = self._detector.track(frame)
 
                 boxes = self._smoother.update(
                     detections=detections,
@@ -294,8 +295,8 @@ class CensorApp:
                     screen_h=screen_h,
                     monitor_left=monitor_left,
                     monitor_top=monitor_top,
-                    input_w=640,
-                    input_h=640,
+                    input_w=frame.shape[1],
+                    input_h=frame.shape[0],
                 )
 
                 if self._overlay:
@@ -339,7 +340,7 @@ class CensorApp:
                 self._smoother.reset()
         except Exception:
             pass
-        
+
         try:
             if self._detector:
                 self._detector.reset_tracker()

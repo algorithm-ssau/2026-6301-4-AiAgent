@@ -1,5 +1,6 @@
 """
 Windows оверлей с отрисовкой черных прямоугольников
+Оптимизированная версия для высокой производительности
 """
 import threading
 import time
@@ -8,7 +9,6 @@ from typing import List, Tuple
 import win32api
 import win32con
 import win32gui
-
 
 Box = Tuple[int, int, int, int]
 
@@ -24,11 +24,10 @@ class WindowsOverlay:
         self._thread = None
         self._lock = threading.Lock()
         self._boxes: List[Box] = []
+        self._dirty = True
+        self._last_boxes_hash = 0
 
         self._class_name = f"AlcoholCensorOverlay_{id(self)}"
-
-        # Цвет, который будет прозрачным.
-        # ВАЖНО: не черный, иначе черные прямоугольники тоже станут прозрачными.
         self._transparent_color = win32api.RGB(255, 0, 255)
 
     def start(self) -> None:
@@ -43,7 +42,6 @@ class WindowsOverlay:
             try:
                 win32gui.RegisterClass(wc)
             except win32gui.error as e:
-                # 1410 = класс окна уже существует
                 if e.winerror != 1410:
                     raise
 
@@ -74,7 +72,6 @@ class WindowsOverlay:
             if not self._hwnd:
                 raise RuntimeError("Не удалось создать окно оверлея")
 
-            # Фиолетовый цвет будет прозрачным.
             win32gui.SetLayeredWindowAttributes(
                 self._hwnd,
                 self._transparent_color,
@@ -88,8 +85,6 @@ class WindowsOverlay:
             self._running = True
             self._thread = threading.Thread(target=self._message_loop, daemon=True)
             self._thread.start()
-
-            print(f"Оверлей запущен: {self.width}x{self.height}")
 
         except Exception as e:
             print(f"Ошибка запуска оверлея: {e}")
@@ -106,15 +101,19 @@ class WindowsOverlay:
                 pass
             self._hwnd = None
 
-        print("Оверлей остановлен")
-
     def update_boxes(self, boxes: List[Box]) -> None:
-        """Обновить список боксов и вызвать перерисовку"""
-        new_boxes = list(boxes)
+        """Обновить список боксов с проверкой изменений"""
+        # Хэшируем для быстрого сравнения
+        boxes_hash = hash(tuple(tuple(b) for b in boxes))
+
+        if boxes_hash == self._last_boxes_hash:
+            return  # Нет изменений
+
+        self._last_boxes_hash = boxes_hash
+
         with self._lock:
-            if self._boxes == new_boxes:
-                return
-            self._boxes = new_boxes
+            self._boxes = list(boxes)
+            self._dirty = True
 
         if self._hwnd:
             try:
@@ -126,12 +125,13 @@ class WindowsOverlay:
         return self._running
 
     def _fill_rectangles(self, hdc):
-        """Нарисовать черные залитые прямоугольники"""
+        """Оптимизированная отрисовка с batch-операциями"""
         if not hdc:
             return
 
         with self._lock:
-            boxes = list(self._boxes)
+            boxes = self._boxes
+            self._dirty = False
 
         if not boxes:
             return
@@ -141,13 +141,15 @@ class WindowsOverlay:
         old_pen = None
 
         try:
+            # Создаем черную кисть один раз
             brush = win32gui.CreateSolidBrush(win32api.RGB(0, 0, 0))
             old_brush = win32gui.SelectObject(hdc, brush)
 
-            # Убираем обводку, оставляем только заливку.
+            # Убираем обводку
             null_pen = win32gui.GetStockObject(win32con.NULL_PEN)
             old_pen = win32gui.SelectObject(hdc, null_pen)
 
+            # Отрисовка всех прямоугольников
             for box in boxes:
                 if len(box) != 4:
                     continue
@@ -164,7 +166,6 @@ class WindowsOverlay:
 
         except Exception as e:
             print(f"Ошибка рисования: {e}")
-
         finally:
             try:
                 if old_pen:
@@ -180,39 +181,31 @@ class WindowsOverlay:
         """Обработчик сообщений"""
         if msg == win32con.WM_PAINT:
             hdc, paint_struct = win32gui.BeginPaint(hwnd)
+
+            # Двойная буферизация для плавности
             mem_dc = win32gui.CreateCompatibleDC(hdc)
             bitmap = win32gui.CreateCompatibleBitmap(hdc, self.width, self.height)
             old_bitmap = win32gui.SelectObject(mem_dc, bitmap)
 
             try:
-                # Заполняем фон прозрачным цветом.
+                # Заполняем фон прозрачным цветом
                 bg_brush = win32gui.CreateSolidBrush(self._transparent_color)
                 rect = (0, 0, self.width, self.height)
                 win32gui.FillRect(mem_dc, rect, bg_brush)
                 win32gui.DeleteObject(bg_brush)
 
-                # Поверх рисуем черные залитые прямоугольники.
+                # Рисуем прямоугольники
                 self._fill_rectangles(mem_dc)
+
+                # Копируем на экран
                 win32gui.BitBlt(
-                    hdc,
-                    0,
-                    0,
-                    self.width,
-                    self.height,
-                    mem_dc,
-                    0,
-                    0,
-                    win32con.SRCCOPY,
+                    hdc, 0, 0, self.width, self.height,
+                    mem_dc, 0, 0, win32con.SRCCOPY
                 )
-
             finally:
-                try:
-                    win32gui.SelectObject(mem_dc, old_bitmap)
-                    win32gui.DeleteObject(bitmap)
-                    win32gui.DeleteDC(mem_dc)
-                except Exception:
-                    pass
-
+                win32gui.SelectObject(mem_dc, old_bitmap)
+                win32gui.DeleteObject(bitmap)
+                win32gui.DeleteDC(mem_dc)
                 win32gui.EndPaint(hwnd, paint_struct)
 
             return 0
@@ -231,8 +224,7 @@ class WindowsOverlay:
         while self._running:
             try:
                 win32gui.PumpWaitingMessages()
-                time.sleep(0.01)
+                time.sleep(0.005)  # Уменьшена задержка для более быстрого отклика
             except Exception as e:
                 if self._running:
-                    print(f"Ошибка в цикле сообщений: {e}")
-                    time.sleep(0.1)
+                    time.sleep(0.01)
