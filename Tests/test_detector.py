@@ -30,9 +30,11 @@ def test_select_device_returns_string():
 
 
 def test_detector_device_auto():
-    """Автовыбор устройства не должен падать (работает с NVIDIA, AMD ROCm и CPU)."""
+    """Автовыбор устройства не должен падать (NVIDIA/AMD/Intel/CPU)."""
     detector = BottleDetector(MODEL, device="auto")
-    assert detector._device in ("cuda", "cpu")
+    # .onnx: "dml" | "cuda" | "cpu"  (ONNX Runtime провайдер)
+    # .pt:   "cuda" | "xpu" | "cpu"  (PyTorch устройство)
+    assert isinstance(detector._device, str) and detector._device
 
 
 def test_detector_device_cpu_explicit():

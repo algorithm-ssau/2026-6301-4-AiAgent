@@ -1,6 +1,7 @@
 """
 Windows оверлей с отрисовкой черных прямоугольников
 """
+import ctypes
 import threading
 import time
 from typing import List, Tuple
@@ -8,6 +9,8 @@ from typing import List, Tuple
 import win32api
 import win32con
 import win32gui
+
+_WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
 
 Box = Tuple[int, int, int, int]
@@ -84,6 +87,10 @@ class WindowsOverlay:
 
             win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
             win32gui.UpdateWindow(self._hwnd)
+
+            # Исключить окно из захвата экрана (MSS, PrintScreen, OBS и т.д.)
+            # Без этого overlay попадает в кадр → модель не видит бутылку → квадрат моргает.
+            ctypes.windll.user32.SetWindowDisplayAffinity(self._hwnd, _WDA_EXCLUDEFROMCAPTURE)
 
             self._running = True
             self._thread = threading.Thread(target=self._message_loop, daemon=True)

@@ -26,6 +26,7 @@ class CensorApp:
         )
 
         self.conf_value = tk.DoubleVar(value=0.35)
+        self.conf_value.trace_add("write", self._on_conf_changed)
         self.monitor_index = tk.IntVar(value=1)
 
         self._running = False
@@ -360,6 +361,13 @@ class CensorApp:
         self.model_entry.config(state=state)
         self.conf_scale.config(state=state)
         self.monitor_spin.config(state=state)
+
+    def _on_conf_changed(self, *_):
+        conf = float(self.conf_value.get())
+        if self._detector is not None:
+            self._detector.set_conf(conf)
+        if self._smoother is not None:
+            self._smoother.set_params(min_confidence=conf)
 
     def _on_close(self):
         if self._running:

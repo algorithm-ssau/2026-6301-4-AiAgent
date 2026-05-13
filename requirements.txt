@@ -1,5 +1,6 @@
 ultralytics>=8.3.0
-onnxruntime>=1.18.0
+onnxruntime-directml>=1.18.0; sys_platform=="win32"
+onnxruntime>=1.18.0; sys_platform!="win32"
 opencv-python>=4.10.0
 numpy>=1.26.0
 mss>=9.0.1
