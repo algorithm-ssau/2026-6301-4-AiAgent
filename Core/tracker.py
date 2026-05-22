@@ -45,10 +45,23 @@ class _TrackState:
     y2: float
     age: int
     track_id: int
-    created_at: float = field(default_factory=time.time)
-    last_update: float = field(default_factory=time.time)
-    history: deque = field(default_factory=lambda: deque(maxlen=10))
-    confidence_history: deque = field(default_factory=lambda: deque(maxlen=10))
+    created_at: float
+    last_update: float
+    history: deque
+    confidence_history: deque
+
+    def __init__(self, x1: float, y1: float, x2: float, y2: float,
+                 age: int, track_id: int):
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+        self.age = age
+        self.track_id = track_id
+        self.created_at = time.time()
+        self.last_update = time.time()
+        self.history = deque(maxlen=10)
+        self.confidence_history = deque(maxlen=10)
 
 
 @dataclass
