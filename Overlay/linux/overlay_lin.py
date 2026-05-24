@@ -44,7 +44,7 @@ class LinuxOverlay(OverlayBase):
 
     def update_boxes(self, boxes: List[Box]) -> None:
         with self._lock:
-            self._boxes = boxes
+            self._boxes = list(boxes)
         if self._window and hasattr(self, '_darea'):
             GLib.idle_add(self._darea.queue_draw)
 
