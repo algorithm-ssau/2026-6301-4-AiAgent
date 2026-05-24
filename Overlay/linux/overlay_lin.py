@@ -116,9 +116,17 @@ class LinuxOverlay(OverlayBase):
         # Draw censorship boxes
         cr.set_source_rgba(0, 0, 0, 1.0) # Black
         with self._lock:
-            for (x1, y1, x2, y2) in self._boxes:
-                cr.rectangle(x1, y1, x2 - x1, y2 - y1)
-                cr.fill()
+            boxes = list(self._boxes)
+
+        for (x1, y1, x2, y2) in boxes:
+            left = max(0, min(width, min(x1, x2)))
+            top = max(0, min(height, min(y1, y2)))
+            right = max(0, min(width, max(x1, x2)))
+            bottom = max(0, min(height, max(y1, y2)))
+            if right <= left or bottom <= top:
+                continue
+            cr.rectangle(left, top, right - left, bottom - top)
+            cr.fill()
 
     def _on_realize(self, widget):
         surface = widget.get_native().get_surface()
