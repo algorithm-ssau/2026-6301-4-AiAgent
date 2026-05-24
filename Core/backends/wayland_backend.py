@@ -106,6 +106,12 @@ class WaylandBackend:
         if self._loop is not None:
             self._loop.quit()
             self._loop = None
+        if (
+            self._loop_thread is not None
+            and self._loop_thread != threading.current_thread()
+        ):
+            self._loop_thread.join(timeout=2.0)
+        self._loop_thread = None
 
     def get_monitor_rect(self) -> Dict:
         if self._monitor_rect is None:
